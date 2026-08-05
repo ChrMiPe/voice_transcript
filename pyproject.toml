@@ -1,0 +1,19 @@
+[project]
+name = "voice-transcript"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "mlx-lm",
+    "rumps",
+    "pyinstaller",
+]
+
+[project.scripts]
+voice-transcript = "voice_transcript.menubar:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voice_transcript"]
