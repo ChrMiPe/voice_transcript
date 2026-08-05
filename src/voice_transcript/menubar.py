@@ -29,6 +29,7 @@ from voice_transcript.llm_server import (
 )
 from voice_transcript.main import dictate, load_history, write_clipboard
 from voice_transcript.notify import notify
+from voice_transcript.panel import Panel, attach as attach_panel
 
 
 def _asset_path(name):
@@ -102,6 +103,11 @@ OPEN_TIMEOUT = 10
 HISTORY_MENU_ITEMS = 10
 HISTORY_LABEL_CHARS = 45
 
+# Wartezeit, bis rumps das Statusitem gebaut hat (Sekunden).
+PANEL_SETUP_INTERVAL = 0.2
+# Im Panel ist mehr Platz als in einem Menüeintrag.
+PANEL_LABEL_CHARS = 34
+
 
 def _on_main(fn):
     """Fuehrt fn auf dem Main-Thread aus.
@@ -132,6 +138,11 @@ class VoiceTranscriptApp(rumps.App):
         self._state = "idle"
         self._llm_process = None
         self._dictation_thread = None
+        # Vor allem anderen: _refresh_history() und _update_status() laufen noch in
+        # __init__ und ziehen das Panel mit — ohne diese Zuweisung schlaegt das mit
+        # AttributeError fehl und die App startet gar nicht.
+        self._panel = None
+        self._panel_router = None
 
         # super() hat gerade das PNG gesetzt — jetzt das SF-Symbol darueberlegen.
         # initializeStatusBar() liest _icon_nsimage beim Launch, der frueh gesetzte
@@ -181,6 +192,12 @@ class VoiceTranscriptApp(rumps.App):
         self._status_timer = rumps.Timer(self._update_status, STATUS_INTERVAL)
         self._status_timer.start()
 
+        # Das Statusitem entsteht erst in rumps' applicationDidFinishLaunching,
+        # also nach __init__. Ein kurzer Timer wartet darauf und haengt dann das
+        # Panel an; danach schaltet er sich ab.
+        self._panel_timer = rumps.Timer(self._install_panel, PANEL_SETUP_INTERVAL)
+        self._panel_timer.start()
+
     @property
     def recording(self):
         """Blockiert ein zweites Diktat — auch während noch verarbeitet wird."""
@@ -206,6 +223,7 @@ class VoiceTranscriptApp(rumps.App):
     def _apply_state(self):
         self._apply_icon()
         self.dictate_item.title = self._dictate_title()
+        self._refresh_panel()
 
     def _apply_icon(self):
         image = SYMBOL_IMAGES.get(self._state)
@@ -236,6 +254,7 @@ class VoiceTranscriptApp(rumps.App):
 
     def _update_status(self, _=None):
         self.llm_status_item.title = self._llm_status_title()
+        self._refresh_panel()
 
         # Sind die Bedienungshilfen erteilt, gibt es nichts zu melden — dann bleibt
         # die Zeile ausgeblendet statt einen Haken zu zeigen, den niemand braucht.
@@ -243,6 +262,112 @@ class VoiceTranscriptApp(rumps.App):
         if not granted:
             self.access_status_item.title = "⚠ Bedienungshilfen fehlen — klicken"
         self.access_status_item._menuitem.setHidden_(granted)
+
+    # ─── Popover-Panel ───
+
+    def _install_panel(self, _=None):
+        """Haengt das Panel an das Statusitem, sobald es existiert.
+
+        Scheitert das, bleibt das Menue am Statusitem haengen und die App
+        funktioniert wie vorher — ein Panel ist kein Grund, die Menueleiste zu
+        verlieren.
+        """
+        status_item = getattr(self._nsapp, "nsstatusitem", None)
+        if status_item is None:
+            return  # rumps ist noch nicht fertig, naechster Timer-Durchlauf
+
+        self._panel_timer.stop()
+        try:
+            button, self._panel_router = attach_panel(status_item, self._status_clicked)
+            self._panel = Panel(self, button)
+            log("Panel am Statusitem installiert")
+        except Exception as e:
+            log(f"Panel nicht installierbar, bleibe beim Menue: {type(e).__name__}: {e}")
+            self._panel = None
+            self._panel_router = None
+            status_item.setMenu_(self._menu._menu)
+
+    def _status_clicked(self, right):
+        if right or self._panel is None:
+            self._show_menu()
+            return
+
+        # Laesst sich das Panel nicht zeigen, darf der Klick nicht ins Leere gehen —
+        # dann kommt das Menue, wie vor der Umstellung.
+        if not self._panel.toggle():
+            log("Panel nicht sichtbar — zeige stattdessen das Menue")
+            self._show_menu()
+
+    def _show_menu(self):
+        """Zeigt das klassische Menue beim Rechtsklick.
+
+        Das Menue muss dafuer kurz zurueck an das Statusitem — nur dann zeichnet
+        macOS es an der richtigen Stelle. Danach wieder abklemmen, sonst faengt es
+        den naechsten Linksklick wieder ab.
+        """
+        status_item = self._nsapp.nsstatusitem
+        status_item.setMenu_(self._menu._menu)
+        status_item.button().performClick_(None)
+        status_item.setMenu_(None)
+
+    def _refresh_panel(self):
+        if self._panel is not None:
+            self._panel.refresh_if_open()
+
+    # ─── Delegate fuer panel.py ───
+
+    def panel_state(self):
+        return self._state
+
+    def panel_dictate_label(self):
+        return DICTATE_LABELS[self._state]
+
+    def panel_hotkey_label(self):
+        return format_hotkey(
+            self.settings["hotkey"]["key"], self.settings["hotkey"]["modifiers"]
+        )
+
+    def panel_history(self):
+        entries = []
+        for entry in load_history()[:HISTORY_MENU_ITEMS]:
+            text = entry["result"]
+            label = text.replace("\n", " ")
+            if len(label) > PANEL_LABEL_CHARS:
+                label = label[:PANEL_LABEL_CHARS] + "…"
+            entries.append({
+                "time": _format_time(entry.get("timestamp")),
+                "label": label,
+                "text": text,
+            })
+        return entries
+
+    def panel_status_lines(self):
+        lines = [{"text": self._llm_status_title(), "warn": "⚠" in self._llm_status_title()}]
+        if not permissions.is_trusted():
+            lines.append({
+                "text": "⚠ Bedienungshilfen fehlen — klicken",
+                "warn": True,
+                "action": "accessibility",
+            })
+        return lines
+
+    def panel_status_action(self, action):
+        if action == "accessibility":
+            self._panel.close()
+            self.fix_accessibility(None)
+
+    def panel_toggle_dictation(self):
+        # Das Panel schliessen: waehrend des Diktats liegt der Fokus sonst hier
+        # statt im Zielfenster, und der Text wuerde am falschen Ort landen.
+        self._panel.close()
+        self.toggle_dictation()
+
+    def panel_copy(self, text):
+        self._panel.close()
+        if write_clipboard(text.encode("utf-8")):
+            notify("Diktat", "In Clipboard kopiert!")
+        else:
+            notify("Diktat", "Kopieren fehlgeschlagen")
 
     def _check_accessibility_on_launch(self):
         """Beim Start pruefen, ob am Cursor eingefuegt werden darf.
@@ -370,6 +495,8 @@ class VoiceTranscriptApp(rumps.App):
         # komplett ab, weshalb das Untermenü bis zum ersten Diktat leer blieb.
         if history_menu._menu is not None:
             history_menu.clear()
+
+        self._refresh_panel()
 
         history = load_history()
         if not history:

@@ -152,22 +152,53 @@ Nichts ersetzt zu werden. Und zwischen Einfügen und Wiederherstellen liegt eine
 (`PASTE_SETTLE_SECONDS`), weil `osascript` zurückkehrt, sobald das Tastenereignis abgeschickt ist —
 die Ziel-App liest die Zwischenablage erst danach.
 
-### Menü
+### Panel (Linksklick)
 
-Klick auf das Mikrofon-Icon:
+Ein Linksklick auf das Icon öffnet ein Popover — kein Menü, sondern ein kleines Fenster:
+
+```
+┌────────────────────────────────┐
+│  Voice Transcript              │
+│   ┌────────────────────────┐   │
+│   │   Diktieren            │   │  ← rot gefüllt während der Aufnahme
+│   └────────────────────────┘   │
+│            ⌃⌘⇧E                │
+│  Letzte Diktate                │
+│  ┌──────────────────────────┐  │
+│  │ 20:14  Hallo Tom, das …  │  │  ← Klick kopiert ins Clipboard
+│  │ 19:52  Wir brauchen no…  │  │
+│  └──────────────────────────┘  │
+│  LLM bereit                    │
+│  Rechtsklick auf das Icon: …   │
+└────────────────────────────────┘
+```
+
+| Element | Funktion |
+|---------|----------|
+| **Diktier-Taste** | folgt dem Zustand („Aufnahme stoppen", „Wird verarbeitet…"), während der Aufnahme systemrot |
+| **Letzte Diktate** | die letzten 10, scrollbar; Klick kopiert ins Clipboard und schließt das Panel |
+| **Statuszeile** | LLM-Zustand, alle 5 s aktualisiert — siehe Tabelle unten |
+| **⚠ Bedienungshilfen fehlen** | nur solange die Berechtigung fehlt; Klick öffnet die Systemeinstellungen |
+
+### Menü (Rechtsklick)
+
+Alles, was man selten braucht, bleibt im gewohnten `NSMenu`:
 
 | Eintrag | Funktion |
 |---------|----------|
-| **Diktieren (⌃⌘E)** | Titel folgt dem Zustand: „Aufnahme stoppen" während der Aufnahme, „Wird verarbeitet…" während der Bereinigung |
-| **Letzte Diktate** | Untermenü, letzte 10 Diktate mit Uhrzeit; Klick kopiert ins Clipboard |
-| **Einstellungen** | Untermenü: `Hotkey ändern…`, `Shortcuts verwalten…`, `Config-Ordner öffnen`, `Historie löschen…` |
-| **LLM-Status** | ausgegraut, alle 5 s aktualisiert — siehe Tabelle unten |
-| **⚠ Bedienungshilfen fehlen** | erscheint **nur**, solange die Berechtigung fehlt; Klick öffnet den Bereich in den Systemeinstellungen |
+| **Diktieren (⌃⌘E)** | wie die Taste im Panel |
+| **Letzte Diktate** | Untermenü |
+| **Einstellungen** | `Hotkey ändern…`, `Shortcuts verwalten…`, `Config-Ordner öffnen`, `Historie löschen…` |
 | **Beenden (⌘Q)** | App und LLM-Server beenden |
 
 Der Hotkey steht als Text im Titel, weil ein echtes Key-Equivalent am `NSMenuItem` bei offenem
 Menü zusätzlich zum globalen Hotkey feuern und das Diktat doppelt starten würde. `⌘Q` bei
 „Beenden" ist dagegen ein echtes Kürzel und wird von macOS rechtsbündig gesetzt.
+
+Solange ein Menü am Statusitem hängt, fängt es jeden Linksklick ab und die Action der Taste feuert
+nie — für das Panel muss es also abgeklemmt werden (`panel.attach`). Der Rechtsklick hängt es kurz
+zurück, öffnet es und klemmt es wieder ab. Lässt sich das Popover nicht zeigen, fällt der Linksklick
+automatisch auf das Menü zurück, damit der Klick nicht ins Leere geht.
 
 Die Statuszeile zeigt, ob die LLM-Bereinigung tatsächlich greift — ohne sie merkt man einen
 ausgefallenen Server nur daran, dass der Text schlechter aussieht. Ein Symbol steht nur dort, wo
@@ -281,6 +312,7 @@ voice_transcript/
     ├── menubar.py                # Menüleisten-App (rumps), Einstiegspunkt
     ├── main.py                   # Diktat-Ablauf und Historie
     ├── hotkey.py                 # globaler Hotkey (Carbon), Keycode-Tabelle
+    ├── panel.py                  # Popover-Panel am Statusitem (Linksklick)
     ├── permissions.py            # Bedienungshilfen-Status abfragen und anfordern
     ├── applog.py                 # Log nach Application Support
     ├── llm.py                    # Client: Socket + Subprozess-Fallback
@@ -371,7 +403,7 @@ Die App setzt `LANG=de_DE.UTF-8` selbst. Falls doch: System-Locale auf UTF-8 pr�
 |-----------|-------------|
 | Spracherkennung | [yap](https://github.com/finnvoor/yap) (Apple Speech Framework, on-device) |
 | LLM | [MLX](https://github.com/ml-explore/mlx) + [Qwen3-4B-4bit](https://huggingface.co/mlx-community/Qwen3-4B-4bit) |
-| Menüleiste | [rumps](https://github.com/jaredks/rumps) |
+| Menüleiste | [rumps](https://github.com/jaredks/rumps) (Menü) + `NSPopover` (Panel) |
 | Hotkey | Carbon `RegisterEventHotKey` (via `ctypes`, ohne Berechtigung) |
 | Berechtigungs-Status | `AXIsProcessTrusted` (via `ctypes`, kein zusätzliches pyobjc-Paket) |
 | Paketmanager | [uv](https://docs.astral.sh/uv/) |
