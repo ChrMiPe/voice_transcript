@@ -128,13 +128,24 @@ Klick auf das Mikrofon-Icon:
 
 | Eintrag | Funktion |
 |---------|----------|
-| **Diktieren (⌃⌘E)** | Diktat starten/stoppen |
-| **Historie** | letzte 10 Diktate; Klick kopiert ins Clipboard |
-| **Hotkey ändern** | Format `ctrl+cmd+e` — Modifier `cmd`, `shift`, `alt`, `ctrl` |
-| **Shortcuts verwalten** | Trigger anlegen/ändern; leerer Ersetzungstext löscht ihn |
+| **Diktieren (⌃⌘E)** | Titel folgt dem Zustand: „Aufnahme stoppen" während der Aufnahme, „Verarbeitet…" während der Bereinigung |
+| **LLM-Status** | ausgegraute Anzeige, alle 5 s aktualisiert — siehe Tabelle unten |
+| **Historie** | letzte 10 Diktate mit Uhrzeit; Klick kopiert ins Clipboard |
+| **Hotkey ändern…** | Format `ctrl+cmd+e` — Modifier `cmd`, `shift`, `alt`, `ctrl` |
+| **Shortcuts verwalten…** | Trigger anlegen/ändern; leerer Ersetzungstext löscht ihn |
 | **Config-Ordner öffnen** | öffnet den Support-Ordner im Finder |
-| **Historie löschen** | leert `history.json` |
+| **Historie löschen…** | leert `history.json`, nach Rückfrage |
 | **Beenden (⌘Q)** | App und LLM-Server beenden |
+
+Der Status-Eintrag zeigt, ob die LLM-Bereinigung tatsächlich greift — ohne ihn merkt man einen
+ausgefallenen Server nur daran, dass der Text schlechter aussieht:
+
+| Anzeige | Bedeutung |
+|---------|-----------|
+| `✓ LLM bereit` | Server läuft, Modell geladen, Socket erreichbar |
+| `◌ LLM lädt Modell…` | Server gestartet, Modell noch nicht im RAM (dauert nach dem App-Start etwas) |
+| `⚠ LLM nicht erreichbar` | Server läuft nicht — es kommt nur der Füllwörter-Filter (siehe Troubleshooting) |
+| `LLM-Bereinigung aus` | `LLM_ENABLED = False` in `config.py` |
 
 ### Text-Shortcuts
 

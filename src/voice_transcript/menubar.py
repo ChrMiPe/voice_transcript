@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import threading
+from datetime import datetime
 
 import rumps
 
@@ -17,7 +18,11 @@ from voice_transcript.config import (
     save_settings,
 )
 from voice_transcript.hotkey import format_hotkey, register_hotkey
-from voice_transcript.llm_server import is_running as llm_is_running, stop_server as llm_stop_server
+from voice_transcript.llm_server import (
+    SOCKET_PATH,
+    is_running as llm_is_running,
+    stop_server as llm_stop_server,
+)
 from voice_transcript.main import dictate, load_history
 from voice_transcript.notify import notify
 
@@ -36,31 +41,55 @@ ICON_RECORDING = _asset_path("recordingTemplate.png")
 ICON_PROCESSING = _asset_path("processingTemplate.png")
 MENUBAR_PID_FILE = "/tmp/voice_transcript_menubar.pid"
 
+ICONS = {"idle": ICON_IDLE, "recording": ICON_RECORDING, "processing": ICON_PROCESSING}
+DICTATE_LABELS = {
+    "idle": "Diktieren",
+    "recording": "Aufnahme stoppen",
+    "processing": "Verarbeitet…",
+}
+
+# Wie oft der LLM-Status im Menü nachgezogen wird (Sekunden). Der Check ist
+# billig — PID-Datei lesen, Signal 0 senden, Socket-Existenz prüfen.
+LLM_STATUS_INTERVAL = 5
+
+HISTORY_MENU_ITEMS = 10
+HISTORY_LABEL_CHARS = 60
+
+
+def _format_time(timestamp):
+    """Zeitstempel eines Historien-Eintrags als HH:MM."""
+    if not timestamp:
+        return "--:--"
+    try:
+        return datetime.fromisoformat(timestamp).strftime("%H:%M")
+    except (TypeError, ValueError):
+        return "--:--"
+
 
 class VoiceTranscriptApp(rumps.App):
     def __init__(self):
         super().__init__("Voice Transcript", icon=ICON_IDLE, template=True, quit_button=None)
-        self.recording = False
         self.settings = load_settings()
-
-        hotkey_label = format_hotkey(
-            self.settings["hotkey"]["key"],
-            self.settings["hotkey"]["modifiers"],
-        )
+        self._state = "idle"
+        self._llm_process = None
 
         self.dictate_item = rumps.MenuItem(
-            f"Diktieren ({hotkey_label})", callback=self.toggle_dictation
+            self._dictate_title(), callback=self.toggle_dictation
         )
+        # Ohne callback zeichnet rumps den Eintrag ausgegraut — reine Statusanzeige.
+        self.llm_status_item = rumps.MenuItem("LLM: Status wird geprüft…")
 
         self.menu = [
             self.dictate_item,
             rumps.separator,
+            self.llm_status_item,
+            rumps.separator,
             rumps.MenuItem("Historie"),
             rumps.separator,
-            rumps.MenuItem("Hotkey ändern", callback=self.change_hotkey),
-            rumps.MenuItem("Shortcuts verwalten", callback=self.manage_shortcuts),
+            rumps.MenuItem("Hotkey ändern…", callback=self.change_hotkey),
+            rumps.MenuItem("Shortcuts verwalten…", callback=self.manage_shortcuts),
             rumps.MenuItem("Config-Ordner öffnen", callback=self.open_config_dir),
-            rumps.MenuItem("Historie löschen", callback=self.clear_history),
+            rumps.MenuItem("Historie löschen…", callback=self.clear_history),
             rumps.separator,
             rumps.MenuItem("Beenden", callback=rumps.quit_application, key="q"),
         ]
@@ -70,6 +99,42 @@ class VoiceTranscriptApp(rumps.App):
         self._register_hotkey()
         self._start_llm_server()
 
+        self._update_llm_status()
+        self._llm_status_timer = rumps.Timer(self._update_llm_status, LLM_STATUS_INTERVAL)
+        self._llm_status_timer.start()
+
+    @property
+    def recording(self):
+        """Blockiert ein zweites Diktat — auch während noch verarbeitet wird."""
+        return self._state in ("recording", "processing")
+
+    def _dictate_title(self):
+        hotkey_label = format_hotkey(
+            self.settings["hotkey"]["key"],
+            self.settings["hotkey"]["modifiers"],
+        )
+        return f"{DICTATE_LABELS[self._state]} ({hotkey_label})"
+
+    def _set_state(self, state):
+        """Zustand wechseln und Icon + Menü-Titel nachziehen."""
+        self._state = state
+        self.icon = ICONS[state]
+        self.dictate_item.title = self._dictate_title()
+
+    def _llm_status_title(self):
+        if not LLM_ENABLED:
+            return "LLM-Bereinigung aus"
+        # Die PID-Datei schreibt der Server erst nach dem Modell-Laden, der Socket
+        # kommt unmittelbar danach — daraus lässt sich "lädt noch" ableiten.
+        if llm_is_running() and os.path.exists(SOCKET_PATH):
+            return "✓ LLM bereit"
+        if self._llm_process is not None and self._llm_process.poll() is None:
+            return "◌ LLM lädt Modell…"
+        return "⚠ LLM nicht erreichbar"
+
+    def _update_llm_status(self, _=None):
+        self.llm_status_item.title = self._llm_status_title()
+
     def _write_pid(self):
         with open(MENUBAR_PID_FILE, "w") as f:
             f.write(str(os.getpid()))
@@ -77,7 +142,7 @@ class VoiceTranscriptApp(rumps.App):
 
     def _cleanup(self):
         llm_stop_server()
-        if hasattr(self, "_llm_process") and self._llm_process:
+        if self._llm_process is not None:
             self._llm_process.terminate()
         if os.path.exists(MENUBAR_PID_FILE):
             os.remove(MENUBAR_PID_FILE)
@@ -96,6 +161,7 @@ class VoiceTranscriptApp(rumps.App):
                 stderr=subprocess.DEVNULL,
             )
         except Exception:
+            self._llm_process = None
             notify("Voice Transcript", "LLM-Server konnte nicht gestartet werden")
 
     def _register_hotkey(self):
@@ -117,45 +183,50 @@ class VoiceTranscriptApp(rumps.App):
         thread.start()
 
     def _run_dictation(self):
-        self.recording = True
+        # Sofort sperren, damit ein schneller zweiter Hotkey-Druck nicht ein
+        # zweites Diktat startet, bevor dictate() den Zustand meldet.
+        self._set_state("recording")
 
         def on_start():
-            self.icon = ICON_RECORDING
+            self._set_state("recording")
 
         def on_stop():
-            self.icon = ICON_PROCESSING
+            self._set_state("processing")
 
         def on_result(text):
-            self.icon = ICON_IDLE
-            self.recording = False
+            self._set_state("idle")
             self._refresh_history()
 
         try:
             result = dictate(on_start=on_start, on_stop=on_stop, on_result=on_result)
             if result is None:
-                self.icon = ICON_IDLE
-                self.recording = False
+                self._set_state("idle")
         except Exception:
-            self.icon = ICON_IDLE
-            self.recording = False
+            self._set_state("idle")
 
     def _refresh_history(self):
         history_menu = self.menu["Historie"]
-        if history_menu._menu is None:
-            return
 
-        history_menu.clear()
+        # clear() greift direkt auf das NSMenu zu, das erst mit dem ersten add()
+        # entsteht. Beim App-Start ist es None — früher brach die Methode hier
+        # komplett ab, weshalb das Untermenü bis zum ersten Diktat leer blieb.
+        if history_menu._menu is not None:
+            history_menu.clear()
 
         history = load_history()
         if not history:
             history_menu.add(rumps.MenuItem("(leer)"))
             return
 
-        for entry in history[:10]:
+        for entry in history[:HISTORY_MENU_ITEMS]:
             text = entry["result"]
-            label = text[:60] + "..." if len(text) > 60 else text
-            label = label.replace("\n", " ")
-            item = rumps.MenuItem(label, callback=self._copy_history_item)
+            label = text.replace("\n", " ")
+            if len(label) > HISTORY_LABEL_CHARS:
+                label = label[:HISTORY_LABEL_CHARS] + "…"
+            item = rumps.MenuItem(
+                f"{_format_time(entry.get('timestamp'))}  {label}",
+                callback=self._copy_history_item,
+            )
             item._history_text = text
             history_menu.add(item)
 
@@ -195,9 +266,8 @@ class VoiceTranscriptApp(rumps.App):
             save_settings(self.settings)
             self._register_hotkey()
 
-            hotkey_label = format_hotkey(key, modifiers)
-            self.dictate_item.title = f"Diktieren ({hotkey_label})"
-            notify("Voice Transcript", f"Neuer Hotkey: {hotkey_label}")
+            self.dictate_item.title = self._dictate_title()
+            notify("Voice Transcript", f"Neuer Hotkey: {format_hotkey(key, modifiers)}")
 
     def manage_shortcuts(self, _):
         shortcuts = {}
@@ -255,6 +325,20 @@ class VoiceTranscriptApp(rumps.App):
         subprocess.run(["open", APP_SUPPORT_DIR])
 
     def clear_history(self, _):
+        count = len(load_history())
+        if not count:
+            notify("Diktat", "Historie ist bereits leer")
+            return
+
+        confirmed = rumps.alert(
+            title="Historie löschen?",
+            message=f"{count} gespeicherte Diktate werden endgültig entfernt.",
+            ok="Löschen",
+            cancel="Abbrechen",
+        )
+        if not confirmed:
+            return
+
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump([], f)
         self._refresh_history()
