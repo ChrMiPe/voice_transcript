@@ -154,7 +154,19 @@ class PanelController(NSViewController):
 
     @objc.python_method
     def refresh(self):
-        """Holt den aktuellen Stand beim Delegate ab. Nur aufrufen, wenn sichtbar."""
+        """Alles neu — beim Oeffnen des Panels."""
+        self.refresh_status()
+        self.refresh_history()
+
+    @objc.python_method
+    def refresh_status(self):
+        """Taste und Statuszeilen. Billig, darf im Sekundentakt laufen.
+
+        Bewusst *ohne* die Historie: die wurde hier frueher mitgezogen, wodurch der
+        5-Sekunden-Timer alle Zeilen loeschte und neu erzeugte. Die Scroll-Position
+        sprang dabei zurueck nach oben, und noetig war es nie — die Historie aendert
+        sich nur nach einem Diktat.
+        """
         state = self.delegate.panel_state()
         self.dictate_button.setTitle_(self.delegate.panel_dictate_label())
         self.hotkey_label.setStringValue_(self.delegate.panel_hotkey_label())
@@ -163,12 +175,11 @@ class PanelController(NSViewController):
         self.dictate_button.setBezelColor_(
             NSColor.systemRedColor() if state in TINTED_STATES else None
         )
-
-        self._refresh_history()
         self._refresh_status()
 
     @objc.python_method
-    def _refresh_history(self):
+    def refresh_history(self):
+        """Liste neu aufbauen. Nur wenn sich die Historie wirklich geaendert hat."""
         for button in self._row_buttons:
             button.removeFromSuperview()
         self._row_buttons = []
@@ -353,10 +364,19 @@ class Panel:
             return True
         return self.show()
 
-    def refresh_if_open(self):
-        """Zustandswechsel nachziehen, solange das Panel offen ist."""
-        if self.is_open:
-            try:
-                self.controller.refresh()
-            except Exception as e:
-                log(f"Panel-Aktualisierung fehlgeschlagen: {type(e).__name__}: {e}")
+    def _if_open(self, what, fn):
+        if not self.is_open:
+            return
+        try:
+            fn()
+        except Exception as e:
+            log(f"Panel-Aktualisierung ({what}) fehlgeschlagen: {type(e).__name__}: {e}")
+
+    def refresh_status_if_open(self):
+        """Taste und Statuszeilen nachziehen — billig, laeuft im Sekundentakt."""
+        self._if_open("Status", self.controller.refresh_status)
+
+    def refresh_history_if_open(self):
+        """Liste neu aufbauen. Nur aufrufen, wenn sich die Historie geaendert hat:
+        der Neuaufbau setzt die Scroll-Position zurueck."""
+        self._if_open("Historie", self.controller.refresh_history)

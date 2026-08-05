@@ -278,10 +278,28 @@ Ein Diktat durchläuft vier Stufen (`main.py: dictate()`):
 Unix-Socket `/tmp/voice_transcript_llm.sock` — ohne ihn würde jedes Diktat mehrere Sekunden aufs
 Modell-Laden warten. Die Menüleisten-App startet ihn beim Launch und beendet ihn beim Quit.
 
-Der Textbereinigung ist bewusst misstraut: Antworten des Modells werden von `<think>`-Blöcken
-befreit, und ein Ergebnis, das kürzer als 30 % der Eingabe ist, gilt als Halluzination — dann wird
-der ursprüngliche Text behalten. Fällt der Server ganz aus, greift ein Subprozess-Fallback
-(`llm_worker.py`); scheitert auch der, bekommst du den regex-bereinigten Text.
+Der Textbereinigung ist bewusst misstraut. Drei Fälle führen dazu, dass der unbereinigte Text
+gewinnt — jeder mit Benachrichtigung und Eintrag in `app.log`:
+
+| Fall | Erkennung |
+|------|-----------|
+| **Ausgabe abgeschnitten** | `finish_reason == "length"` aus `stream_generate` |
+| **Ausgabe leer** | nach dem Entfernen der `<think>`-Blöcke bleibt nichts |
+| **Ausgabe zu kurz** | unter `MIN_LENGTH_RATIO` (30 %) der Eingabe → zusammengefasst statt bereinigt |
+
+Das Token-Budget richtet sich nach der Eingabe (`TOKEN_BUDGET_FACTOR` × Eingabe-Tokens +
+`TOKEN_BUDGET_MARGIN`, gedeckelt auf `MLX_MAX_TOKENS`), denn Bereinigen heißt nicht erfinden: die
+Ausgabe ist ungefähr so lang wie das Diktat.
+
+> Vorher stand hier ein fester Deckel von 1024 Tokens. Bei 4,10 Zeichen pro Token — mit diesem
+> Tokenizer gemessen — sind das nur ~4.200 Zeichen Ausgabe, also rund fünf Minuten Sprechen.
+> Längere Diktate kamen **mitten im Satz abgeschnitten** heraus, und der 30-%-Wächter hat das nicht
+> gemerkt: bei 6.000 Zeichen Eingabe gilt `4200 > 1800`, er hätte erst ab ~14.000 Zeichen Eingabe
+> angeschlagen. Genau dieser Bereich — 4.200 bis 14.000 Zeichen — verlor still Text.
+
+Das Modell schafft ~40 Tokens/s, das Budget-Maximum braucht also über eine Minute; `LLM_TIMEOUT`
+liegt deshalb bei 180 s statt der früheren 30. Fällt der Server ganz aus, greift ein
+Subprozess-Fallback (`llm_worker.py`); scheitert auch der, bekommst du den regex-bereinigten Text.
 
 ## Entwicklung
 

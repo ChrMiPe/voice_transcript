@@ -8,11 +8,15 @@ import struct
 import sys
 import threading
 
+from voice_transcript.applog import log
 from voice_transcript.config import (
+    MIN_LENGTH_RATIO,
     MLX_MAX_TOKENS,
     MLX_MODEL,
     MLX_TEMPERATURE,
     SYSTEM_PROMPT,
+    TOKEN_BUDGET_FACTOR,
+    TOKEN_BUDGET_MARGIN,
     USER_TEMPLATE,
 )
 
@@ -38,8 +42,26 @@ class LLMServer:
         self.model, self.tokenizer = load(MLX_MODEL)
         self.sampler = su.make_sampler(temp=MLX_TEMPERATURE)
 
+    def _token_budget(self, text):
+        """Obergrenze fuer die Ausgabe, an der Eingabe bemessen.
+
+        Bereinigen heisst nicht erfinden — die Ausgabe ist ungefaehr so lang wie
+        die Eingabe, mit etwas Luft fuer Interpunktion und Absaetze. Ein fester
+        Deckel von 1024 Tokens hat lange Diktate stumm abgeschnitten: bei 4,10
+        Zeichen pro Token (gemessen mit diesem Tokenizer) waren das ~4.200
+        Zeichen, also rund fuenf Minuten Sprechen.
+        """
+        prompt_tokens = len(self.tokenizer.encode(text))
+        budget = int(prompt_tokens * TOKEN_BUDGET_FACTOR) + TOKEN_BUDGET_MARGIN
+        return min(budget, MLX_MAX_TOKENS)
+
     def generate(self, text):
-        from mlx_lm import generate
+        """Bereinigt den Text. Rueckgabe: (ergebnis, hinweis).
+
+        `hinweis` ist None im Normalfall, sonst der Grund, warum die
+        LLM-Bereinigung verworfen wurde — der Aufrufer meldet das dem Nutzer.
+        """
+        from mlx_lm import stream_generate
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -48,21 +70,50 @@ class LLMServer:
         prompt = self.tokenizer.apply_chat_template(
             messages, add_generation_prompt=True, tokenize=False, enable_thinking=False
         )
+        max_tokens = self._token_budget(text)
 
+        # stream_generate statt generate(): nur der Stream liefert finish_reason.
+        # Ohne den war nicht zu erkennen, ob das Modell fertig war oder ans Limit
+        # gestossen ist — und ein abgeschnittener Satz sieht wie ein fertiger aus.
         with self._lock:
-            result = generate(
+            chunks = []
+            last = None
+            for response in stream_generate(
                 self.model,
                 self.tokenizer,
                 prompt=prompt,
-                max_tokens=MLX_MAX_TOKENS,
+                max_tokens=max_tokens,
                 sampler=self.sampler,
+            ):
+                chunks.append(response.text)
+                last = response
+            raw = "".join(chunks)
+
+        truncated = last is not None and last.finish_reason == "length"
+        result = strip_thinking(raw).strip()
+
+        if truncated:
+            # Ein halber Satz ist schlimmer als ein unbereinigter ganzer.
+            log(
+                f"LLM-Ausgabe am Limit abgeschnitten ({last.generation_tokens}/"
+                f"{max_tokens} Tokens) — nehme den unbereinigten Text"
             )
+            return text, "Text zu lang für die LLM-Bereinigung"
 
-        result = strip_thinking(result).strip()
+        if not result:
+            log("LLM-Ausgabe leer — nehme den unbereinigten Text")
+            return text, "LLM lieferte kein Ergebnis"
 
-        if result and len(result) > len(text) * 0.3:
-            return result
-        return text
+        # Deutlich kuerzer als die Eingabe heisst: das Modell hat zusammengefasst
+        # oder halluziniert, statt zu bereinigen.
+        if len(result) < len(text) * MIN_LENGTH_RATIO:
+            log(
+                f"LLM-Ausgabe zu kurz ({len(result)} statt mind. "
+                f"{int(len(text) * MIN_LENGTH_RATIO)} Zeichen) — nehme den unbereinigten Text"
+            )
+            return text, "LLM-Ergebnis verworfen (zu kurz)"
+
+        return result, None
 
     def handle_client(self, conn):
         try:
@@ -89,8 +140,8 @@ class LLMServer:
             if not text:
                 response = {"result": "", "ok": True}
             else:
-                result = self.generate(text)
-                response = {"result": result, "ok": True}
+                result, notice = self.generate(text)
+                response = {"result": result, "ok": True, "notice": notice}
 
         except Exception as e:
             response = {"result": "", "ok": False, "error": str(e)}

@@ -4,7 +4,8 @@ import socket
 import struct
 import subprocess
 
-from voice_transcript.config import LLM_ENABLED, UV_PATH, project_dir
+from voice_transcript.applog import log
+from voice_transcript.config import LLM_ENABLED, LLM_TIMEOUT, UV_PATH, project_dir
 from voice_transcript.llm_server import SOCKET_PATH
 from voice_transcript.notify import notify
 
@@ -12,7 +13,7 @@ from voice_transcript.notify import notify
 def _query_server(text):
     """Sendet Text an den persistenten LLM-Server."""
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(30)
+    sock.settimeout(LLM_TIMEOUT)
     sock.connect(SOCKET_PATH)
 
     try:
@@ -37,6 +38,11 @@ def _query_server(text):
 
         response = json.loads(data.decode("utf-8"))
         if response.get("ok") and response.get("result"):
+            # Der Server sagt mit, wenn er die Bereinigung verworfen hat — sonst
+            # sieht ein zurueckgegebener Rohtext wie ein bereinigter aus.
+            notice = response.get("notice")
+            if notice:
+                notify("LLM übersprungen", notice)
             return response["result"]
         return None
     finally:
@@ -57,7 +63,7 @@ def _query_subprocess(text):
         capture_output=True,
         text=True,
         encoding="utf-8",
-        timeout=30,
+        timeout=LLM_TIMEOUT,
         env=env,
     )
 
@@ -85,5 +91,6 @@ def llm_polish(text):
         return text
 
     except Exception as e:
-        notify("LLM Skip", f"Fallback auf Regex: {str(e)[:50]}")
+        log(f"LLM nicht nutzbar: {type(e).__name__}: {e}")
+        notify("LLM übersprungen", f"Fallback auf Regex: {str(e)[:60]}")
         return text

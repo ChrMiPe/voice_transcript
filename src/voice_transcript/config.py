@@ -75,9 +75,26 @@ def project_dir():
     return os.path.expanduser("~/projects/voice_transcript")
 
 MLX_MODEL = "mlx-community/Qwen3-4B-4bit"
-MLX_MAX_TOKENS = 1024
 MLX_TEMPERATURE = 0.2
 LLM_ENABLED = True
+
+# Obergrenze fuer die LLM-Ausgabe. Frueher standen hier fest 1024 Tokens — bei
+# 4,10 Zeichen pro Token (mit diesem Tokenizer gemessen) sind das nur ~4.200
+# Zeichen, also rund fuenf Minuten Sprechen. Alles darueber kam mitten im Satz
+# abgeschnitten heraus, ohne Meldung: der Laengen-Waechter unten haette erst ab
+# ~14.000 Zeichen Eingabe angeschlagen.
+MLX_MAX_TOKENS = 4096
+# Das eigentliche Budget richtet sich nach der Eingabe — bereinigen heisst nicht
+# erfinden, die Ausgabe ist ungefaehr so lang wie das Diktat.
+TOKEN_BUDGET_FACTOR = 1.6
+TOKEN_BUDGET_MARGIN = 128
+# Deutlich kuerzer als die Eingabe heisst: zusammengefasst statt bereinigt.
+MIN_LENGTH_RATIO = 0.3
+
+# Das Modell schafft ~40 Tokens/s, das Budget-Maximum braucht also ueber eine
+# Minute. Der frueher hier ausreichende 30-Sekunden-Deckel haette lange Diktate
+# in den Socket-Timeout laufen lassen.
+LLM_TIMEOUT = 180
 
 SHORTCUTS_FILE = os.path.join(APP_SUPPORT_DIR, "shortcuts.json")
 HISTORY_FILE = os.path.join(APP_SUPPORT_DIR, "history.json")

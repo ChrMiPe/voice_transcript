@@ -223,7 +223,7 @@ class VoiceTranscriptApp(rumps.App):
     def _apply_state(self):
         self._apply_icon()
         self.dictate_item.title = self._dictate_title()
-        self._refresh_panel()
+        self._refresh_panel_status()
 
     def _apply_icon(self):
         image = SYMBOL_IMAGES.get(self._state)
@@ -254,7 +254,7 @@ class VoiceTranscriptApp(rumps.App):
 
     def _update_status(self, _=None):
         self.llm_status_item.title = self._llm_status_title()
-        self._refresh_panel()
+        self._refresh_panel_status()
 
         # Sind die Bedienungshilfen erteilt, gibt es nichts zu melden — dann bleibt
         # die Zeile ausgeblendet statt einen Haken zu zeigen, den niemand braucht.
@@ -310,9 +310,13 @@ class VoiceTranscriptApp(rumps.App):
         status_item.button().performClick_(None)
         status_item.setMenu_(None)
 
-    def _refresh_panel(self):
+    def _refresh_panel_status(self):
         if self._panel is not None:
-            self._panel.refresh_if_open()
+            self._panel.refresh_status_if_open()
+
+    def _refresh_panel_history(self):
+        if self._panel is not None:
+            self._panel.refresh_history_if_open()
 
     # ─── Delegate fuer panel.py ───
 
@@ -496,7 +500,7 @@ class VoiceTranscriptApp(rumps.App):
         if history_menu._menu is not None:
             history_menu.clear()
 
-        self._refresh_panel()
+        self._refresh_panel_history()
 
         history = load_history()
         if not history:
