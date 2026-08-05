@@ -4,6 +4,8 @@ set -e
 APP_NAME="Voice Transcript"
 BUNDLE_ID="com.voicetranscript.app"
 APP_PATH="/Applications/${APP_NAME}.app"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SUPPORT_DIR="$HOME/Library/Application Support/VoiceTranscript"
 
 echo "==> App stoppen..."
 pkill -f "Voice Transcript" 2>/dev/null || true
@@ -18,6 +20,12 @@ cp -R "dist/${APP_NAME}.app" "$APP_PATH"
 
 echo "==> Signieren..."
 codesign --force --deep --sign - "$APP_PATH"
+
+# Das Bundle enthaelt MLX nicht (siehe build_app.spec/excludes) — der LLM-Server
+# laeuft per `uv run` aus dem Repo. Pfad hinterlegen, damit die App ihn findet.
+echo "==> Repo-Pfad hinterlegen..."
+mkdir -p "$SUPPORT_DIR"
+printf '%s\n' "$SCRIPT_DIR" > "$SUPPORT_DIR/project_dir"
 
 echo "==> Berechtigungen zuruecksetzen..."
 tccutil reset Accessibility "$BUNDLE_ID" 2>/dev/null

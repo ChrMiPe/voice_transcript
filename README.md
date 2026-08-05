@@ -1,201 +1,297 @@
 # Voice Transcript
 
-Eine leichtgewichtige macOS-Menüleisten-App für Sprachdiktate mit KI-gestützter Textbereinigung.
+Diktier-App für die macOS-Menüleiste. Hotkey drücken, sprechen, Hotkey drücken — der bereinigte
+Text landet am Cursor. Spracherkennung und Textbereinigung laufen **komplett lokal** auf dem Mac,
+es verlässt kein Audio und kein Text das Gerät.
 
-Diktiere Text per Hotkey, das lokale LLM (MLX) bereinigt Grammatik, Interpunktion und Formatierung — alles lokal auf deinem Mac, ohne Cloud.
+```
+Hotkey ⌃⌘E → yap (Apple Speech) → Shortcuts → Füllwörter-Filter → LLM (Qwen3-4B) → Clipboard → ⌘V
+```
+
+Das lokale LLM korrigiert Grammatik, Interpunktion und Groß-/Kleinschreibung, macht aus
+gesprochener Sprache Schriftsprache und setzt bei Themenwechseln Absätze — ohne den Inhalt zu
+verändern.
 
 ## Features
 
-- Globaler Hotkey zum Starten/Stoppen von Diktaten (Standard: `Ctrl+Cmd+E`)
-- Lokales LLM (Qwen3-4B via MLX) für Textbereinigung — läuft komplett offline
-- Automatische Absätze bei Themenwechsel
-- Text-Shortcuts (z.B. "chris email" wird zu deiner E-Mail-Adresse)
-- Menüleisten-App mit visuellem Feedback (idle/aufnahme/verarbeitung)
-- Diktat-Historie (letzte 20 Einträge)
-- Konfigurierbarer Hotkey und Shortcuts über die GUI
+- **Globaler Hotkey** zum Starten/Stoppen, Standard `⌃⌘E`, in der App änderbar
+- **Lokales LLM** (Qwen3-4B via MLX) — offline, keine Cloud, keine API-Keys
+- **Text-Shortcuts**: gesprochenes „chris email" wird zur echten Adresse
+- **Menüleisten-Feedback**: Icon zeigt Ruhe / Aufnahme / Verarbeitung
+- **Historie** der letzten 20 Diktate, per Klick zurück ins Clipboard
+- **Graceful Degradation**: fällt das LLM aus, kommt der regex-bereinigte Text statt einer Fehlermeldung
 
 ## Voraussetzungen
 
-- macOS 13+ (Apple Silicon — M1/M2/M3/M4)
+| | |
+|---|---|
+| Hardware | Mac mit Apple Silicon (M1 oder neuer) — MLX läuft nicht auf Intel |
+| System | macOS 13+ |
+| Speicher | ~2,1 GB Modell-Cache + ~360 MB Python-Dependencies |
+| Tools | [Homebrew](https://brew.sh), [uv](https://docs.astral.sh/uv/), [yap](https://github.com/finnvoor/yap) — `install.sh` installiert fehlende automatisch |
 
-## Schnellinstallation
+> **Das Repo bleibt nach der Installation nötig.** Die `.app` enthält MLX absichtlich nicht
+> (das Bundle wäre sonst mehrere GB groß), sie startet den LLM-Server per `uv run` aus dem Repo.
+> Klone es also an einen dauerhaften Ort und lösche es nicht nach dem Build.
 
-Ein Befehl installiert alles automatisch (Homebrew, uv, yap, Dependencies, LLM-Modell, App):
+## Installation
+
+### 1. Klonen und installieren
 
 ```bash
-git clone <repo-url>
-cd voice_transcript
+git clone git@github.com:ChrMiPe/voice_transcript.git ~/projects/voice_transcript
+cd ~/projects/voice_transcript
 bash install.sh
 ```
 
-Das Script:
-1. Prüft ob macOS auf Apple Silicon läuft
-2. Installiert fehlende Tools (Homebrew, uv, yap) automatisch
-3. Lädt Python-Dependencies und das LLM-Modell (~2.5 GB beim ersten Mal)
-4. Baut die App, installiert sie in `/Applications` und signiert sie
-5. Startet die App
+Das Script prüft die Hardware, installiert fehlende Tools (Homebrew, yap, uv), lädt die
+Python-Dependencies und das LLM-Modell (~2,1 GB, nur beim ersten Mal), baut die `.app`, installiert
+sie nach `/Applications`, signiert sie ad-hoc, richtet den Autostart als LaunchAgent ein und
+startet die App.
 
-### macOS-Berechtigungen setzen
+Der Pfad ist frei wählbar — `install.sh` hinterlegt den Repo-Ort in
+`~/Library/Application Support/VoiceTranscript/project_dir`, damit die gebaute App ihn findet.
 
-Nach der Installation (und nach jedem Rebuild):
+### 2. Berechtigungen erteilen (Pflicht)
 
-1. **Systemeinstellungen > Datenschutz & Sicherheit > Eingabeüberwachung**
-   - "Voice Transcript" hinzufügen und aktivieren (für den globalen Hotkey)
+Ohne diese vier Freigaben bleibt die App still oder tut nichts. macOS lässt sie sich seit einigen
+Versionen **nicht** per Script setzen (System Integrity Protection schützt die TCC-Datenbank) — die
+entsprechenden Versuche in `install.sh` und `build.sh` sind nur noch Altlast und scheitern lautlos.
 
-2. **Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen**
-   - "Voice Transcript" hinzufügen und aktivieren (für automatisches Einfügen am Cursor)
+Unter **Systemeinstellungen → Datenschutz & Sicherheit** jeweils „Voice Transcript" hinzufügen und
+aktivieren:
 
-### App starten
+| Bereich | Wofür | Symptom, wenn es fehlt |
+|---------|-------|------------------------|
+| **Eingabeüberwachung** | globaler Hotkey (`NSEvent`-Monitor) | Hotkey tut nichts, Menü funktioniert aber |
+| **Bedienungshilfen** | Einfügen am Cursor via `⌘V` | Meldung „Bitte Bedienungshilfen pruefen", Text liegt nur im Clipboard |
+| **Mikrofon** | Aufnahme durch `yap` | kein Text erkannt |
+| **Spracherkennung** | Apples Speech-Framework | kein Text erkannt |
 
-Über Spotlight, Raycast oder Launchpad nach "Voice Transcript" suchen und starten.
+Mikrofon und Spracherkennung fragt macOS beim ersten Diktat selbst ab. Eingabeüberwachung und
+Bedienungshilfen musst du manuell setzen.
 
-Optional: Unter **Systemeinstellungen > Allgemein > Anmeldeobjekte** hinzufügen für automatischen Start bei Login.
+> **Nach jedem Rebuild neu erteilen.** Die Ad-hoc-Signatur ändert sich bei jedem Build, macOS
+> erkennt die App danach als andere Anwendung. Alten Eintrag mit `–` entfernen, neu hinzufügen.
 
-## Manuelle Installation
+### 3. Shortcuts übernehmen (optional)
+
+Die App startet ohne Shortcuts. Die Beispieldatei aus dem Repo aktivieren:
+
+```bash
+cp config/shortcuts.json ~/Library/Application\ Support/VoiceTranscript/
+```
+
+Danach die App neu starten. Alternativ Shortcuts einzeln über das Menü anlegen.
+
+### Manuelle Installation
 
 <details>
-<summary>Falls du die Schritte einzeln durchführen möchtest</summary>
-
-### 1. Voraussetzungen installieren
+<summary>Einzelschritte, falls du <code>install.sh</code> nicht ausführen willst</summary>
 
 ```bash
-# uv installieren
+# 1. Tools
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# yap installieren (braucht Homebrew)
 brew install yap
-```
 
-### 2. Repository klonen & Dependencies
-
-```bash
-git clone <repo-url>
-cd voice_transcript
+# 2. Dependencies
 uv sync
-```
 
-### 3. LLM-Modell herunterladen
-
-Beim ersten Start wird das Modell automatisch von HuggingFace geladen (~2.5 GB). Alternativ vorab:
-
-```bash
+# 3. LLM-Modell vorab laden (sonst passiert es beim ersten Start)
 uv run python -c "from mlx_lm import load; load('mlx-community/Qwen3-4B-4bit')"
-```
 
-### 4. App bauen und installieren
-
-```bash
+# 4. App bauen, installieren, signieren, Repo-Pfad hinterlegen
 bash build.sh
 ```
 
-Das baut die `.app`, installiert sie in `/Applications` und signiert sie.
+`install.sh` macht darüber hinaus nur noch den Autostart:
+
+```bash
+cp com.voicetranscript.app.plist ~/Library/LaunchAgents/
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.voicetranscript.app.plist
+```
 
 </details>
 
 ## Benutzung
 
-1. **Hotkey drücken** (Standard: `Ctrl+Cmd+E`) — Aufnahme startet, Menüleisten-Icon wechselt zu rot
-2. **Sprechen** — auf Deutsch diktieren
-3. **Hotkey erneut drücken** — Aufnahme stoppt, Text wird verarbeitet und am Cursor eingefügt
+1. **`⌃⌘E` drücken** — Ton („Tink"), Icon wird zum Aufnahme-Symbol
+2. **Auf Deutsch sprechen**
+3. **`⌃⌘E` erneut drücken** — Icon zeigt Verarbeitung, dann wird der Text am Cursor eingefügt
+   (Ton „Purr")
 
-### Menüleiste
+Der Text liegt zusätzlich immer im Clipboard — wenn das Einfügen scheitert, reicht `⌘V`.
 
-Klick auf das Mikrofon-Icon in der Menüleiste:
+### Menü
 
-- **Diktieren** — Diktat starten/stoppen
-- **Historie** — letzte Diktate anzeigen, Klick kopiert in Clipboard
-- **Hotkey ändern** — globalen Hotkey anpassen
-- **Shortcuts verwalten** — Text-Expansions hinzufügen/bearbeiten
-- **Config-Ordner öffnen** — Zugriff auf Konfigurationsdateien
+Klick auf das Mikrofon-Icon:
+
+| Eintrag | Funktion |
+|---------|----------|
+| **Diktieren (⌃⌘E)** | Diktat starten/stoppen |
+| **Historie** | letzte 10 Diktate; Klick kopiert ins Clipboard |
+| **Hotkey ändern** | Format `ctrl+cmd+e` — Modifier `cmd`, `shift`, `alt`, `ctrl` |
+| **Shortcuts verwalten** | Trigger anlegen/ändern; leerer Ersetzungstext löscht ihn |
+| **Config-Ordner öffnen** | öffnet den Support-Ordner im Finder |
+| **Historie löschen** | leert `history.json` |
+| **Beenden (⌘Q)** | App und LLM-Server beenden |
 
 ### Text-Shortcuts
 
-Shortcuts sind Wörter/Phrasen die automatisch durch Text ersetzt werden, z.B.:
+Wörter, die nach der Spracherkennung ersetzt werden — praktisch für alles, was man nicht diktieren
+mag. Vergleich ist case-insensitiv, längere Trigger gewinnen (`chris email privat` vor `chris email`).
 
 | Trigger | Ersetzung |
 |---------|-----------|
-| chris email | chris@example.com |
-| chris email privat | chris.private@example.com |
-| meine adresse | Musterstraße 1, 12345 Berlin |
-
-Shortcuts können über das Menü "Shortcuts verwalten" bearbeitet werden. Die Datei liegt unter `~/Library/Application Support/VoiceTranscript/shortcuts.json`.
+| `chris email` | `chris@example.com` |
+| `meine adresse` | `Musterstraße 1, 12345 Berlin` |
 
 ## Konfiguration
 
-Alle Konfigurationsdateien liegen unter `~/Library/Application Support/VoiceTranscript/`:
+Alles unter `~/Library/Application Support/VoiceTranscript/` (Menü → „Config-Ordner öffnen"):
 
-| Datei | Beschreibung |
-|-------|-------------|
-| `shortcuts.json` | Text-Shortcuts |
-| `settings.json` | Hotkey-Einstellung |
-| `history.json` | Diktat-Historie |
+| Datei | Inhalt |
+|-------|--------|
+| `shortcuts.json` | Text-Shortcuts (`{"trigger": "ersetzung"}`) |
+| `settings.json` | Hotkey |
+| `history.json` | letzte 20 Diktate (Rohtext + Ergebnis + Zeitstempel) |
+| `project_dir` | Repo-Pfad, von `build.sh` geschrieben |
 
-## Projektstruktur
+Modell, Temperatur und der System-Prompt für die Bereinigung stehen in
+`src/voice_transcript/config.py`. `LLM_ENABLED = False` schaltet das LLM ab, dann bleibt nur der
+Füllwörter-Filter. Nach Änderungen: `bash build.sh`.
+
+Findet die App `uv` oder `yap` nicht, lassen sich die Pfade überschreiben:
+
+| Variable | Zweck |
+|----------|-------|
+| `VOICE_TRANSCRIPT_UV` | Pfad zur `uv`-Binary |
+| `VOICE_TRANSCRIPT_YAP` | Pfad zur `yap`-Binary |
+| `VOICE_TRANSCRIPT_PROJECT_DIR` | Repo-Pfad (überschreibt `project_dir`) |
+
+## Wie es funktioniert
+
+Ein Diktat durchläuft vier Stufen (`main.py: dictate()`):
+
+1. **Aufnahme** — `yap dictate` als Subprozess, Transkript kommt über stdout. Ein zweiter
+   Hotkey-Druck schickt `SIGINT` an die in `/tmp/yap_dictation.pid` notierte PID.
+2. **Shortcuts** — `shortcuts.py` ersetzt Trigger-Phrasen.
+3. **Füllwörter** — `cleanup.py` entfernt per Regex „ähm", „also", „quasi" und Ähnliches.
+4. **LLM** — `llm.py` schickt den Text an den lokalen Server; das Ergebnis geht ins Clipboard und
+   wird per AppleScript (`System Events`, `⌘V`) eingefügt.
+
+**Der LLM-Server** (`llm_server.py`) hält das Modell dauerhaft im RAM und lauscht auf dem
+Unix-Socket `/tmp/voice_transcript_llm.sock` — ohne ihn würde jedes Diktat mehrere Sekunden aufs
+Modell-Laden warten. Die Menüleisten-App startet ihn beim Launch und beendet ihn beim Quit.
+
+Der Textbereinigung ist bewusst misstraut: Antworten des Modells werden von `<think>`-Blöcken
+befreit, und ein Ergebnis, das kürzer als 30 % der Eingabe ist, gilt als Halluzination — dann wird
+der ursprüngliche Text behalten. Fällt der Server ganz aus, greift ein Subprozess-Fallback
+(`llm_worker.py`); scheitert auch der, bekommst du den regex-bereinigten Text.
+
+## Entwicklung
+
+```bash
+uv sync                                    # Dependencies
+uv run voice-transcript                    # Menüleisten-App aus dem Quellbaum
+uv run python -m voice_transcript          # ein einzelnes Diktat, ohne Menüleiste
+uv run python -m voice_transcript.llm_server   # LLM-Server im Vordergrund (zeigt Fehler)
+bash build.sh                              # neu bauen und nach /Applications installieren
+```
+
+Aus dem Quellbaum gestartet braucht die App keine Berechtigungen für „Voice Transcript", sondern für
+das Terminal, aus dem sie läuft.
+
+### Projektstruktur
 
 ```
 voice_transcript/
-├── dictate.py                    # Raycast Script (optional, als Fallback)
-├── install.sh                    # Ein-Klick-Installer (Tools, Modell, App, Autostart)
-├── build.sh                      # Build-Script für die .app
-├── build_app.spec                # PyInstaller-Konfiguration
+├── install.sh                    # Ein-Klick-Installer (Tools, Modell, Build, Autostart)
+├── build.sh                      # Rebuild + Installation nach /Applications
+├── build_app.spec                # PyInstaller-Konfiguration (MLX bewusst exkludiert)
 ├── com.voicetranscript.app.plist # LaunchAgent für den Autostart
+├── dictate.py                    # Raycast-Script (Fallback ohne Menüleisten-App)
 ├── icon.icns                     # App-Icon
-├── pyproject.toml                # Projekt-Definition und Dependencies
 ├── assets/                       # Menüleisten-Icons (idle/recording/processing)
-├── config/
-│   └── shortcuts.json            # Beispiel-Shortcuts
-└── src/
-    └── voice_transcript/
-        ├── __init__.py
-        ├── __main__.py           # CLI Entry Point
-        ├── menubar.py            # Menüleisten-App (rumps)
-        ├── main.py               # Diktat-Logik
-        ├── llm.py                # LLM-Aufruf (Subprocess)
-        ├── llm_server.py         # Persistenter LLM-Server (Unix-Socket)
-        ├── llm_worker.py         # MLX LLM Worker
-        ├── cleanup.py            # Regex-basierte Textbereinigung
-        ├── shortcuts.py          # Text-Expansions
-        ├── hotkey.py             # Globaler Hotkey (NSEvent)
-        ├── notify.py             # macOS-Notifications
-        └── config.py             # Zentrale Konfiguration
-```
-
-## Nutzung ohne Menüleisten-App
-
-Das Tool funktioniert auch standalone über die Kommandozeile oder als Raycast-Script:
-
-```bash
-# Direkt über CLI
-uv run python -m voice_transcript
-
-# Oder als Raycast-Script: dictate.py in Raycast Script-Verzeichnis verlinken
+├── config/shortcuts.json         # Beispiel-Shortcuts (manuell kopieren)
+└── src/voice_transcript/
+    ├── menubar.py                # Menüleisten-App (rumps), Einstiegspunkt
+    ├── main.py                   # Diktat-Ablauf und Historie
+    ├── hotkey.py                 # globaler Hotkey (NSEvent), Keycode-Tabelle
+    ├── llm.py                    # Client: Socket + Subprozess-Fallback
+    ├── llm_server.py             # persistenter MLX-Server (Unix-Socket)
+    ├── llm_worker.py             # Einmal-Aufruf des Modells (Fallback)
+    ├── cleanup.py                # Füllwörter-Filter
+    ├── shortcuts.py              # Text-Expansion
+    ├── notify.py                 # macOS-Benachrichtigungen
+    └── config.py                 # Pfade, Modell-Parameter, System-Prompt
 ```
 
 ## Troubleshooting
 
-### Hotkey funktioniert nicht
-- Prüfe ob "Voice Transcript" unter **Eingabeüberwachung** freigegeben ist
-- Nach einem Rebuild der App muss die Berechtigung neu gesetzt werden
+**Hotkey tut nichts, Menü funktioniert**
+Eingabeüberwachung fehlt. Nach einem Rebuild alten Eintrag entfernen und neu hinzufügen. Ob der
+Hotkey registriert wurde, meldet die App beim Start als Benachrichtigung.
 
-### "Bitte Bedienungshilfen prüfen"
-- "Voice Transcript" unter **Bedienungshilfen** freigeben
-- Nach einem Rebuild neu hinzufügen
+**„Bitte Bedienungshilfen pruefen"**
+Bedienungshilfen fehlen. Der Text liegt trotzdem im Clipboard — `⌘V` funktioniert.
 
-### Umlaute werden falsch dargestellt
-- Stelle sicher, dass dein System-Locale auf UTF-8 steht
-- Die App setzt `LANG=de_DE.UTF-8` automatisch
+**„Kein Text erkannt"**
+`yap` liefert nichts. Direkt testen:
 
-### LLM-Modell lädt nicht
-- Prüfe Internetverbindung (nur beim ersten Download nötig)
-- Modell-Cache: `~/.cache/huggingface/hub/models--mlx-community--Qwen3-4B-4bit/`
+```bash
+yap dictate            # sprechen, dann Ctrl+C
+```
+
+Kommt hier nichts, fehlen Mikrofon- oder Spracherkennungs-Rechte, oder `yap` ist nicht installiert
+(`brew install yap`).
+
+**Text ist da, aber nur grob bereinigt**
+Der LLM-Server läuft nicht — Interpunktion und Absätze fehlen dann. Prüfen:
+
+```bash
+ls -l /tmp/voice_transcript_llm.sock          # Socket vorhanden?
+cat /tmp/voice_transcript_llm.pid             # Server-PID
+uv run python -m voice_transcript.llm_server  # im Vordergrund starten, Fehler sichtbar
+```
+
+Häufigste Ursache: das Repo wurde verschoben oder gelöscht, `project_dir` zeigt ins Leere. Dann
+`bash build.sh` erneut ausführen.
+
+**LLM-Modell lädt nicht**
+Beim ersten Start braucht es Internet für ~2,1 GB. Cache liegt unter
+`~/.cache/huggingface/hub/models--mlx-community--Qwen3-4B-4bit/`.
+
+**App startet nicht / kein Icon**
+Vermutlich läuft schon eine Instanz — die App verhindert Doppelstarts über
+`/tmp/voice_transcript_menubar.pid`. Aufräumen:
+
+```bash
+pkill -f "Voice Transcript"; rm -f /tmp/voice_transcript_menubar.pid
+open "/Applications/Voice Transcript.app"
+```
+
+**Umlaute falsch**
+Die App setzt `LANG=de_DE.UTF-8` selbst. Falls doch: System-Locale auf UTF-8 prüfen.
+
+## Grenzen
+
+- **Deutsch.** System-Prompt und Füllwörter-Filter sind auf Deutsch ausgelegt.
+- **Apple Silicon.** MLX gibt es nicht für Intel-Macs.
+- **Das Repo muss liegen bleiben** — siehe oben, die `.app` allein genügt nicht.
+- **Berechtigungen nach jedem Rebuild neu**, weil die Ad-hoc-Signatur wechselt.
+- **`dictate.py` ist nur ein Fallback.** Läuft die Menüleisten-App, schreibt das Script lediglich
+  `/tmp/voice_transcript_trigger` — diese Datei liest derzeit niemand, das Diktat startet also
+  nicht. Ohne laufende App diktiert das Script korrekt. Für Raycast ist der globale Hotkey der
+  verlässliche Weg.
 
 ## Technologie
 
 | Komponente | Technologie |
 |-----------|-------------|
-| Spracherkennung | [yap](https://github.com/timvisee/yap) (Apple Speech Framework) |
-| LLM | [MLX](https://github.com/ml-explore/mlx) + Qwen3-4B-4bit |
+| Spracherkennung | [yap](https://github.com/finnvoor/yap) (Apple Speech Framework, on-device) |
+| LLM | [MLX](https://github.com/ml-explore/mlx) + [Qwen3-4B-4bit](https://huggingface.co/mlx-community/Qwen3-4B-4bit) |
 | Menüleiste | [rumps](https://github.com/jaredks/rumps) |
-| Hotkey | PyObjC (NSEvent) |
+| Hotkey | PyObjC (`NSEvent` Global Monitor) |
 | Paketmanager | [uv](https://docs.astral.sh/uv/) |
 | App-Bundle | [PyInstaller](https://pyinstaller.org/) |

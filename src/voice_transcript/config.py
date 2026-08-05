@@ -1,4 +1,6 @@
 import os
+import shutil
+import sys
 
 APP_NAME = "VoiceTranscript"
 APP_SUPPORT_DIR = os.path.join(
@@ -7,7 +9,70 @@ APP_SUPPORT_DIR = os.path.join(
 os.makedirs(APP_SUPPORT_DIR, exist_ok=True)
 
 PID_FILE = "/tmp/yap_dictation.pid"
-YAP_PATH = "/opt/homebrew/bin/yap"
+
+
+def _find_binary(name, candidates, env_var):
+    """Externes Tool suchen. Als .app-Bundle erben wir die Shell-Umgebung nicht,
+    $PATH ist dort minimal — deshalb bekannte Installationsorte pruefen und erst
+    danach auf PATH zurueckfallen. Override per Umgebungsvariable schlaegt alles.
+    """
+    override = os.environ.get(env_var)
+    if override:
+        path = os.path.expanduser(override)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+
+    for candidate in candidates:
+        path = os.path.expanduser(candidate)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+
+    # Nur den Namen zurueckgeben, wenn nichts gefunden wurde: die Fehlermeldung
+    # nennt dann das fehlende Tool statt eines erfundenen Pfads.
+    return shutil.which(name) or name
+
+
+UV_PATH = _find_binary(
+    "uv",
+    (
+        "~/.local/bin/uv",
+        "/opt/homebrew/bin/uv",
+        "/usr/local/bin/uv",
+        "/Library/Frameworks/Python.framework/Versions/3.13/bin/uv",
+    ),
+    "VOICE_TRANSCRIPT_UV",
+)
+
+YAP_PATH = _find_binary(
+    "yap",
+    ("/opt/homebrew/bin/yap", "/usr/local/bin/yap"),
+    "VOICE_TRANSCRIPT_YAP",
+)
+
+# Der LLM-Server laeuft per `uv run` aus dem Repo (das .app-Bundle enthaelt MLX
+# nicht — siehe build_app.spec/excludes). build.sh schreibt den Repo-Pfad hier
+# hinein, damit das Bundle das Repo an beliebiger Stelle findet.
+PROJECT_DIR_FILE = os.path.join(APP_SUPPORT_DIR, "project_dir")
+_SOURCE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def project_dir():
+    """Repo-Pfad fuer `uv run`."""
+    override = os.environ.get("VOICE_TRANSCRIPT_PROJECT_DIR")
+    if override:
+        return os.path.expanduser(override)
+
+    # Aus dem Quellbaum gestartet: der Modulpfad ist die verlaessliche Antwort.
+    if not getattr(sys, "frozen", False):
+        return _SOURCE_ROOT
+
+    if os.path.isfile(PROJECT_DIR_FILE):
+        with open(PROJECT_DIR_FILE, "r", encoding="utf-8") as f:
+            path = f.read().strip()
+        if os.path.isdir(path):
+            return path
+
+    return os.path.expanduser("~/projects/voice_transcript")
 
 MLX_MODEL = "mlx-community/Qwen3-4B-4bit"
 MLX_MAX_TOKENS = 1024

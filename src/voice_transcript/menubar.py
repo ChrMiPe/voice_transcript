@@ -11,7 +11,9 @@ from voice_transcript.config import (
     HISTORY_FILE,
     SHORTCUTS_FILE,
     LLM_ENABLED,
+    UV_PATH,
     load_settings,
+    project_dir,
     save_settings,
 )
 from voice_transcript.hotkey import format_hotkey, register_hotkey
@@ -86,15 +88,9 @@ class VoiceTranscriptApp(rumps.App):
             return
 
         notify("LLM", "Modell wird geladen...")
-        project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if getattr(sys, "frozen", False):
-            # PyInstaller-Modus: Projekt-Verzeichnis aus Config ableiten
-            project_dir = os.path.expanduser("~/projects/voice_transcript")
-
-        uv_path = "/Library/Frameworks/Python.framework/Versions/3.13/bin/uv"
         try:
             self._llm_process = subprocess.Popen(
-                [uv_path, "run", "--project", project_dir,
+                [UV_PATH, "run", "--project", project_dir(),
                  "python", "-m", "voice_transcript.llm_server"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

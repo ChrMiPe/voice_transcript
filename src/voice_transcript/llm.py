@@ -4,12 +4,9 @@ import socket
 import struct
 import subprocess
 
-from voice_transcript.config import LLM_ENABLED
+from voice_transcript.config import LLM_ENABLED, UV_PATH, project_dir
 from voice_transcript.llm_server import SOCKET_PATH
 from voice_transcript.notify import notify
-
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-UV_PATH = "/Library/Frameworks/Python.framework/Versions/3.13/bin/uv"
 
 
 def _query_server(text):
@@ -54,7 +51,7 @@ def _query_subprocess(text):
     env["PYTHONIOENCODING"] = "utf-8"
 
     result = subprocess.run(
-        [UV_PATH, "run", "--project", PROJECT_DIR,
+        [UV_PATH, "run", "--project", project_dir(),
          "python", "-m", "voice_transcript.llm_worker"],
         input=text,
         capture_output=True,

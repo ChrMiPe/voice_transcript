@@ -90,7 +90,7 @@ MODEL_DIR="$HOME/.cache/huggingface/hub/models--mlx-community--Qwen3-4B-4bit"
 if [[ -d "$MODEL_DIR" ]]; then
     info "Modell bereits vorhanden"
 else
-    warn "Modell wird heruntergeladen (~2.5 GB) — das dauert beim ersten Mal..."
+    warn "Modell wird heruntergeladen (~2.1 GB) — das dauert beim ersten Mal..."
     uv run python -c "from mlx_lm import load; load('mlx-community/Qwen3-4B-4bit')"
     info "Modell heruntergeladen"
 fi
@@ -111,6 +111,12 @@ cp -R "dist/${APP_NAME}.app" "$APP_PATH"
 
 # Signieren
 codesign --force --deep --sign - "$APP_PATH"
+
+# Das Bundle enthaelt MLX nicht (siehe build_app.spec/excludes) — der LLM-Server
+# laeuft per `uv run` aus dem Repo. Pfad hinterlegen, damit die App ihn findet.
+SUPPORT_DIR="$HOME/Library/Application Support/VoiceTranscript"
+mkdir -p "$SUPPORT_DIR"
+printf '%s\n' "$SCRIPT_DIR" > "$SUPPORT_DIR/project_dir"
 info "App gebaut und installiert"
 
 # ─── Berechtigungen ───
