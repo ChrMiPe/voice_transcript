@@ -58,4 +58,9 @@ def ensure_listed():
 
 
 def open_settings():
-    subprocess.run(["open", ACCESSIBILITY_PANE])
+    # Obergrenze wie bei allen `open`-Aufrufen: der Aufruf kommt aus einem
+    # Menue-Callback auf dem Main-Thread.
+    try:
+        subprocess.run(["open", ACCESSIBILITY_PANE], timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass

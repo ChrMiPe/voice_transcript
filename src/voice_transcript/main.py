@@ -18,6 +18,14 @@ os.environ.setdefault("LANG", "de_DE.UTF-8")
 os.environ.setdefault("LC_ALL", "de_DE.UTF-8")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
+# Jeder Hilfsprozess im Diktat-Pfad braucht eine Obergrenze. Blieb einer haengen
+# — System Events klemmt nach Schlaf oder Abmeldung gern —, blieb der Zustand auf
+# "processing" stehen und die recording-Property sperrte jedes weitere Diktat aus.
+# Die einzige Ausnahme ist `yap dictate` selbst: dessen Laufzeit bestimmt der
+# Nutzer, indem er den Hotkey erneut drueckt.
+OSASCRIPT_TIMEOUT = 10
+CLIPBOARD_TIMEOUT = 5
+
 
 def save_to_history(raw, result):
     history = []
@@ -131,12 +139,17 @@ def dictate(on_start=None, on_stop=None, on_result=None):
         text = clean_german_text(text)
         text = llm_polish(text)
 
-        # In Clipboard kopieren
-        cb = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
-        cb.communicate(text.encode("utf-8"))
+        # Vor dem Ueberschreiben sichern, damit ein Diktat nicht die Zwischenablage
+        # des Nutzers verbraucht.
+        previous_clipboard = _read_clipboard()
 
+        write_clipboard(text.encode("utf-8"))
         save_to_history(raw_text, text)
-        _paste_at_cursor()
+
+        if _paste_at_cursor():
+            _restore_clipboard(previous_clipboard)
+        # Bei Fehlschlag bleibt der diktierte Text liegen — dann ist ⌘V die
+        # Rettung und darf nicht weggeraeumt werden.
 
         if on_result:
             on_result(text)
@@ -155,6 +168,54 @@ def dictate(on_start=None, on_stop=None, on_result=None):
 
 PASTE_SCRIPT = 'tell application "System Events" to key code 9 using command down'
 
+# Zeit, die die Ziel-App braucht, um das ⌘V zu verarbeiten. osascript kehrt
+# zurueck, sobald System Events das Tastenereignis abgeschickt hat — die Ziel-App
+# liest die Zwischenablage erst danach. Wird hier zu kurz gewartet, stellen wir
+# den alten Inhalt wieder her, bevor er ausgelesen wurde.
+PASTE_SETTLE_SECONDS = 0.5
+
+
+def write_clipboard(data):
+    """Schreibt Bytes in die Zwischenablage. True bei Erfolg."""
+    try:
+        cb = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+        cb.communicate(data, timeout=CLIPBOARD_TIMEOUT)
+        return cb.returncode == 0
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"pbcopy fehlgeschlagen: {type(e).__name__}: {e}")
+        return False
+
+
+def _read_clipboard():
+    """Aktuellen Zwischenablage-Inhalt als Bytes, oder None.
+
+    pbpaste liefert nur Klartext. Bild- oder Rich-Content kommt als leerer bzw.
+    unbrauchbarer Wert zurueck — den wuerden wir beim Wiederherstellen durch
+    Nichts ersetzen und damit mehr kaputt machen als reparieren. Deshalb gilt
+    nur nicht-leerer Text als sicherungswuerdig.
+    """
+    try:
+        res = subprocess.run(["pbpaste"], capture_output=True, timeout=CLIPBOARD_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"pbpaste fehlgeschlagen: {type(e).__name__}: {e}")
+        return None
+
+    if res.returncode != 0 or not res.stdout:
+        return None
+    return res.stdout
+
+
+def _restore_clipboard(data):
+    """Stellt den gesicherten Inhalt wieder her.
+
+    Der diktierte Text ist ueber "Letzte Diktate" weiter erreichbar, es geht also
+    nichts verloren.
+    """
+    if not data:
+        return
+    time.sleep(PASTE_SETTLE_SECONDS)
+    write_clipboard(data)
+
 
 def _paste_at_cursor():
     """Fuegt den Clipboard-Inhalt am Cursor ein (⌘V).
@@ -167,7 +228,24 @@ def _paste_at_cursor():
     """
     time.sleep(0.2)
 
-    res = subprocess.run(["osascript", "-e", PASTE_SCRIPT], capture_output=True, text=True)
+    try:
+        res = subprocess.run(
+            ["osascript", "-e", PASTE_SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=OSASCRIPT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        # Ohne Timeout blieb der Diktat-Thread hier haengen, wenn System Events
+        # klemmt — und mit ihm der Zustand "processing", der jedes weitere
+        # Diktat aussperrt.
+        log(f"Einfuegen abgebrochen — osascript nach {OSASCRIPT_TIMEOUT}s ohne Antwort")
+        notify("Text im Clipboard", "Einfügen hängt — bitte ⌘V drücken")
+        return False
+    except OSError as e:
+        log(f"Einfuegen fehlgeschlagen: {type(e).__name__}: {e}")
+        notify("Text im Clipboard", "Einfügen nicht möglich — bitte ⌘V drücken")
+        return False
 
     if res.returncode == 0:
         notify("Diktat", "Text eingefuegt!")

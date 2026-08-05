@@ -11,5 +11,18 @@ end run\
 """
 
 
+# notify() wird aus dem Diktat-Thread aufgerufen. Ohne Obergrenze haelt ein
+# klemmender Benachrichtigungs-Dienst das ganze Diktat auf — eine Meldung ist das
+# nicht wert.
+NOTIFY_TIMEOUT = 10
+
+
 def notify(title, message):
-    subprocess.run(["osascript", "-e", _SCRIPT, str(message), str(title)])
+    try:
+        subprocess.run(
+            ["osascript", "-e", _SCRIPT, str(message), str(title)],
+            capture_output=True,
+            timeout=NOTIFY_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass  # Eine verschluckte Benachrichtigung darf nichts abbrechen.

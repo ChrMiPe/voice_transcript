@@ -27,7 +27,7 @@ from voice_transcript.llm_server import (
     is_running as llm_is_running,
     stop_server as llm_stop_server,
 )
-from voice_transcript.main import dictate, load_history
+from voice_transcript.main import dictate, load_history, write_clipboard
 from voice_transcript.notify import notify
 
 
@@ -95,6 +95,10 @@ SYMBOL_IMAGES = {
 # AXIsProcessTrusted abfragen.
 STATUS_INTERVAL = 5
 
+# Auch `open` laeuft ueber LaunchServices und kann klemmen. Der Aufruf sitzt im
+# Menue-Callback, also auf dem Main-Thread — ohne Grenze friert die Menueleiste ein.
+OPEN_TIMEOUT = 10
+
 HISTORY_MENU_ITEMS = 10
 HISTORY_LABEL_CHARS = 45
 
@@ -127,6 +131,7 @@ class VoiceTranscriptApp(rumps.App):
         self.settings = load_settings()
         self._state = "idle"
         self._llm_process = None
+        self._dictation_thread = None
 
         # super() hat gerade das PNG gesetzt — jetzt das SF-Symbol darueberlegen.
         # initializeStatusBar() liest _icon_nsimage beim Launch, der frueh gesetzte
@@ -313,11 +318,25 @@ class VoiceTranscriptApp(rumps.App):
     def toggle_dictation(self, _=None):
         if self.recording:
             from voice_transcript.main import stop_dictation
-            stop_dictation()
+            if stop_dictation():
+                return
+
+            # Kein laufender yap-Prozess, obwohl der Zustand "Aufnahme" oder
+            # "Verarbeitung" meldet. Laeuft der Diktat-Thread noch, ist das die
+            # LLM-Bereinigung — die darf nicht unterbrochen werden.
+            if self._dictation_thread is not None and self._dictation_thread.is_alive():
+                return
+
+            # Thread ist weg, der Zustand aber nicht zurueckgesetzt: verwaist.
+            # Ohne diese Freigabe blieb die recording-Property auf True und die
+            # App war bis zum Neustart taub — der Hotkey lief in genau diesen
+            # Zweig und kehrte wirkungslos zurueck.
+            log(f"Verwaister Zustand '{self._state}' — zurueckgesetzt")
+            self._set_state("idle")
             return
 
-        thread = threading.Thread(target=self._run_dictation, daemon=True)
-        thread.start()
+        self._dictation_thread = threading.Thread(target=self._run_dictation, daemon=True)
+        self._dictation_thread.start()
 
     def _run_dictation(self):
         # Sofort sperren, damit ein schneller zweiter Hotkey-Druck nicht ein
@@ -331,15 +350,16 @@ class VoiceTranscriptApp(rumps.App):
             self._set_state("processing")
 
         def on_result(text):
-            self._set_state("idle")
             _on_main(self._refresh_history)
 
         try:
-            result = dictate(on_start=on_start, on_stop=on_stop, on_result=on_result)
-            if result is None:
-                self._set_state("idle")
+            dictate(on_start=on_start, on_stop=on_stop, on_result=on_result)
         except Exception as e:
             log(f"Diktat-Thread abgebrochen: {type(e).__name__}: {e}")
+        finally:
+            # Ein einziger Ort, der aufraeumt: verlaesst dictate() sich auf welchem
+            # Weg auch immer, gibt der Zustand die App wieder frei. Vorher haetten
+            # drei Zweige das leisten muessen — vergisst einer es, ist die App taub.
             self._set_state("idle")
 
     def _refresh_history(self):
@@ -370,10 +390,14 @@ class VoiceTranscriptApp(rumps.App):
 
     def _copy_history_item(self, sender):
         text = getattr(sender, "_history_text", "")
-        if text:
-            cb = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
-            cb.communicate(text.encode("utf-8"))
+        if not text:
+            return
+        # Laeuft auf dem Main-Thread — ein haengendes pbcopy wuerde hier das ganze
+        # Menue einfrieren, deshalb dieselbe Obergrenze wie im Diktat-Pfad.
+        if write_clipboard(text.encode("utf-8")):
             notify("Diktat", "In Clipboard kopiert!")
+        else:
+            notify("Diktat", "Kopieren fehlgeschlagen")
 
     def change_hotkey(self, _):
         response = rumps.Window(
@@ -467,7 +491,7 @@ class VoiceTranscriptApp(rumps.App):
 
     def open_config_dir(self, _):
         from voice_transcript.config import APP_SUPPORT_DIR
-        subprocess.run(["open", APP_SUPPORT_DIR])
+        subprocess.run(["open", APP_SUPPORT_DIR], timeout=OPEN_TIMEOUT)
 
     def clear_history(self, _):
         count = len(load_history())
