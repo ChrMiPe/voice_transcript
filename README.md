@@ -52,27 +52,25 @@ startet die App.
 Der Pfad ist frei wählbar — `install.sh` hinterlegt den Repo-Ort in
 `~/Library/Application Support/VoiceTranscript/project_dir`, damit die gebaute App ihn findet.
 
-### 2. Berechtigungen erteilen (Pflicht)
+### 2. Berechtigungen erteilen
 
-Ohne diese vier Freigaben bleibt die App still oder tut nichts. macOS lässt sie sich seit einigen
-Versionen **nicht** per Script setzen (System Integrity Protection schützt die TCC-Datenbank) — die
-entsprechenden Versuche in `install.sh` und `build.sh` sind nur noch Altlast und scheitern lautlos.
+macOS lässt Berechtigungen **nicht** per Script setzen — System Integrity Protection schützt die
+TCC-Datenbank, jeder direkte `INSERT` scheitert lautlos.
 
-Unter **Systemeinstellungen → Datenschutz & Sicherheit** jeweils „Voice Transcript" hinzufügen und
-aktivieren:
+| Bereich | Wofür | Symptom, wenn es fehlt | Wie |
+|---------|-------|------------------------|-----|
+| **Mikrofon** | Aufnahme durch `yap` | kein Text erkannt | fragt macOS beim ersten Diktat |
+| **Spracherkennung** | Apples Speech-Framework | kein Text erkannt | fragt macOS beim ersten Diktat |
+| **Bedienungshilfen** | Einfügen am Cursor via `⌘V` | „Text im Clipboard" statt Einfügen | Menü → `⚠ Bedienungshilfen fehlen` |
 
-| Bereich | Wofür | Symptom, wenn es fehlt |
-|---------|-------|------------------------|
-| **Eingabeüberwachung** | globaler Hotkey (`NSEvent`-Monitor) | Hotkey tut nichts, Menü funktioniert aber |
-| **Bedienungshilfen** | Einfügen am Cursor via `⌘V` | Meldung „Bitte Bedienungshilfen pruefen", Text liegt nur im Clipboard |
-| **Mikrofon** | Aufnahme durch `yap` | kein Text erkannt |
-| **Spracherkennung** | Apples Speech-Framework | kein Text erkannt |
+Der **Hotkey braucht keine Berechtigung**: er wird über Carbon `RegisterEventHotKey` beim
+WindowServer registriert, nicht über einen Event-Monitor. Eingabeüberwachung ist damit hinfällig.
 
-Mikrofon und Spracherkennung fragt macOS beim ersten Diktat selbst ab. Eingabeüberwachung und
-Bedienungshilfen musst du manuell setzen.
+Für die Bedienungshilfen genügt der Menüeintrag `⚠ Bedienungshilfen fehlen` — er öffnet den
+System-Dialog und trägt die App gleich in die Liste ein, dort nur noch den Schalter umlegen.
 
-> **Nach jedem Rebuild neu erteilen.** Die Ad-hoc-Signatur ändert sich bei jedem Build, macOS
-> erkennt die App danach als andere Anwendung. Alten Eintrag mit `–` entfernen, neu hinzufügen.
+> Die Berechtigung überlebt einen Rebuild, solange die Bundle-ID gleich bleibt. `tccutil reset`
+> gehört deshalb **nicht** in `build.sh` — genau das hat sie früher bei jedem Build gelöscht.
 
 ### 3. Shortcuts übernehmen (optional)
 
@@ -128,24 +126,43 @@ Klick auf das Mikrofon-Icon:
 
 | Eintrag | Funktion |
 |---------|----------|
-| **Diktieren (⌃⌘E)** | Titel folgt dem Zustand: „Aufnahme stoppen" während der Aufnahme, „Verarbeitet…" während der Bereinigung |
-| **LLM-Status** | ausgegraute Anzeige, alle 5 s aktualisiert — siehe Tabelle unten |
-| **Historie** | letzte 10 Diktate mit Uhrzeit; Klick kopiert ins Clipboard |
-| **Hotkey ändern…** | Format `ctrl+cmd+e` — Modifier `cmd`, `shift`, `alt`, `ctrl` |
-| **Shortcuts verwalten…** | Trigger anlegen/ändern; leerer Ersetzungstext löscht ihn |
-| **Config-Ordner öffnen** | öffnet den Support-Ordner im Finder |
-| **Historie löschen…** | leert `history.json`, nach Rückfrage |
+| **Diktieren (⌃⌘E)** | Titel folgt dem Zustand: „Aufnahme stoppen" während der Aufnahme, „Wird verarbeitet…" während der Bereinigung |
+| **Letzte Diktate** | Untermenü, letzte 10 Diktate mit Uhrzeit; Klick kopiert ins Clipboard |
+| **Einstellungen** | Untermenü: `Hotkey ändern…`, `Shortcuts verwalten…`, `Config-Ordner öffnen`, `Historie löschen…` |
+| **LLM-Status** | ausgegraut, alle 5 s aktualisiert — siehe Tabelle unten |
+| **⚠ Bedienungshilfen fehlen** | erscheint **nur**, solange die Berechtigung fehlt; Klick öffnet den System-Dialog |
 | **Beenden (⌘Q)** | App und LLM-Server beenden |
 
-Der Status-Eintrag zeigt, ob die LLM-Bereinigung tatsächlich greift — ohne ihn merkt man einen
-ausgefallenen Server nur daran, dass der Text schlechter aussieht:
+Der Hotkey steht als Text im Titel, weil ein echtes Key-Equivalent am `NSMenuItem` bei offenem
+Menü zusätzlich zum globalen Hotkey feuern und das Diktat doppelt starten würde. `⌘Q` bei
+„Beenden" ist dagegen ein echtes Kürzel und wird von macOS rechtsbündig gesetzt.
+
+Die Statuszeile zeigt, ob die LLM-Bereinigung tatsächlich greift — ohne sie merkt man einen
+ausgefallenen Server nur daran, dass der Text schlechter aussieht. Ein Symbol steht nur dort, wo
+etwas zu tun ist:
 
 | Anzeige | Bedeutung |
 |---------|-----------|
-| `✓ LLM bereit` | Server läuft, Modell geladen, Socket erreichbar |
-| `◌ LLM lädt Modell…` | Server gestartet, Modell noch nicht im RAM (dauert nach dem App-Start etwas) |
+| `LLM bereit` | Server läuft, Modell geladen, Socket erreichbar |
+| `LLM lädt Modell…` | Server gestartet, Modell noch nicht im RAM (dauert nach dem App-Start etwas) |
 | `⚠ LLM nicht erreichbar` | Server läuft nicht — es kommt nur der Füllwörter-Filter (siehe Troubleshooting) |
 | `LLM-Bereinigung aus` | `LLM_ENABLED = False` in `config.py` |
+
+### Das Menüleisten-Icon
+
+Die Zustände nutzen SF Symbols, keine mitgelieferten Bilder — Vektoren bleiben in jeder Größe
+scharf und macOS passt sie an Hell/Dunkel an:
+
+| Zustand | Symbol | Darstellung |
+|---------|--------|-------------|
+| Ruhe | `mic` | einfarbig, folgt der Menüleiste |
+| Aufnahme | `mic.fill` | gefüllt und in Systemrot |
+| Verarbeitung | `waveform` | einfarbig, folgt der Menüleiste |
+
+Rot funktioniert nur, weil ein eingefärbtes SF Symbol als `template=False` zurückkommt. Die
+früheren PNGs in `assets/` enthielten zwar einen roten Punkt, doch bei `template=True` verwirft
+macOS jede Farbe und zeichnet nur die Alpha-Maske — das Rot war nie zu sehen. Die PNGs bleiben als
+Fallback liegen, falls das System ein Symbol nicht kennt.
 
 ### Text-Shortcuts
 
@@ -167,6 +184,7 @@ Alles unter `~/Library/Application Support/VoiceTranscript/` (Menü → „Confi
 | `settings.json` | Hotkey |
 | `history.json` | letzte 20 Diktate (Rohtext + Ergebnis + Zeitstempel) |
 | `project_dir` | Repo-Pfad, von `build.sh` geschrieben |
+| `app.log` | Hotkey-Registrierung, `yap`-Fehler, abgelehntes Einfügen — die App hat als Bundle kein Terminal, hier landen die Details |
 
 Modell, Temperatur und der System-Prompt für die Bereinigung stehen in
 `src/voice_transcript/config.py`. `LLM_ENABLED = False` schaltet das LLM ab, dann bleibt nur der
@@ -185,7 +203,9 @@ Findet die App `uv` oder `yap` nicht, lassen sich die Pfade überschreiben:
 Ein Diktat durchläuft vier Stufen (`main.py: dictate()`):
 
 1. **Aufnahme** — `yap dictate` als Subprozess, Transkript kommt über stdout. Ein zweiter
-   Hotkey-Druck schickt `SIGINT` an die in `/tmp/yap_dictation.pid` notierte PID.
+   Hotkey-Druck schickt `SIGINT` an die in `/tmp/yap_dictation.pid` notierte PID. Ob der Prozess
+   dort noch lebt, wird geprüft — eine verwaiste PID-Datei aus einem Absturz hätte sonst den
+   nächsten Hotkey-Druck verschluckt.
 2. **Shortcuts** — `shortcuts.py` ersetzt Trigger-Phrasen.
 3. **Füllwörter** — `cleanup.py` entfernt per Regex „ähm", „also", „quasi" und Ähnliches.
 4. **LLM** — `llm.py` schickt den Text an den lokalen Server; das Ergebnis geht ins Clipboard und
@@ -223,12 +243,14 @@ voice_transcript/
 ├── com.voicetranscript.app.plist # LaunchAgent für den Autostart
 ├── dictate.py                    # Raycast-Script (Fallback ohne Menüleisten-App)
 ├── icon.icns                     # App-Icon
-├── assets/                       # Menüleisten-Icons (idle/recording/processing)
+├── assets/                       # PNG-Fallback-Icons, falls SF Symbols fehlen
 ├── config/shortcuts.json         # Beispiel-Shortcuts (manuell kopieren)
 └── src/voice_transcript/
     ├── menubar.py                # Menüleisten-App (rumps), Einstiegspunkt
     ├── main.py                   # Diktat-Ablauf und Historie
-    ├── hotkey.py                 # globaler Hotkey (NSEvent), Keycode-Tabelle
+    ├── hotkey.py                 # globaler Hotkey (Carbon), Keycode-Tabelle
+    ├── permissions.py            # Bedienungshilfen-Status abfragen und anfordern
+    ├── applog.py                 # Log nach Application Support
     ├── llm.py                    # Client: Socket + Subprozess-Fallback
     ├── llm_server.py             # persistenter MLX-Server (Unix-Socket)
     ├── llm_worker.py             # Einmal-Aufruf des Modells (Fallback)
@@ -241,11 +263,14 @@ voice_transcript/
 ## Troubleshooting
 
 **Hotkey tut nichts, Menü funktioniert**
-Eingabeüberwachung fehlt. Nach einem Rebuild alten Eintrag entfernen und neu hinzufügen. Ob der
-Hotkey registriert wurde, meldet die App beim Start als Benachrichtigung.
+Der Hotkey braucht keine Berechtigung — eine andere App belegt die Kombination. Die App meldet das
+beim Start als Benachrichtigung und notiert es im Log
+(`~/Library/Application Support/VoiceTranscript/app.log`). Über `Hotkey ändern…` eine andere wählen.
+Der Menütitel zeigt immer die aktuell registrierte Kombination.
 
-**„Bitte Bedienungshilfen pruefen"**
-Bedienungshilfen fehlen. Der Text liegt trotzdem im Clipboard — `⌘V` funktioniert.
+**„Text im Clipboard — bitte ⌘V drücken"**
+Bedienungshilfen fehlen. Im Menü `⚠ Bedienungshilfen fehlen` anklicken. Der Text liegt im
+Clipboard, `⌘V` funktioniert also weiterhin.
 
 **„Kein Text erkannt"**
 `yap` liefert nichts. Direkt testen:
@@ -290,7 +315,6 @@ Die App setzt `LANG=de_DE.UTF-8` selbst. Falls doch: System-Locale auf UTF-8 pr�
 - **Deutsch.** System-Prompt und Füllwörter-Filter sind auf Deutsch ausgelegt.
 - **Apple Silicon.** MLX gibt es nicht für Intel-Macs.
 - **Das Repo muss liegen bleiben** — siehe oben, die `.app` allein genügt nicht.
-- **Berechtigungen nach jedem Rebuild neu**, weil die Ad-hoc-Signatur wechselt.
 - **`dictate.py` ist nur ein Fallback.** Läuft die Menüleisten-App, schreibt das Script lediglich
   `/tmp/voice_transcript_trigger` — diese Datei liest derzeit niemand, das Diktat startet also
   nicht. Ohne laufende App diktiert das Script korrekt. Für Raycast ist der globale Hotkey der
@@ -303,6 +327,6 @@ Die App setzt `LANG=de_DE.UTF-8` selbst. Falls doch: System-Locale auf UTF-8 pr�
 | Spracherkennung | [yap](https://github.com/finnvoor/yap) (Apple Speech Framework, on-device) |
 | LLM | [MLX](https://github.com/ml-explore/mlx) + [Qwen3-4B-4bit](https://huggingface.co/mlx-community/Qwen3-4B-4bit) |
 | Menüleiste | [rumps](https://github.com/jaredks/rumps) |
-| Hotkey | PyObjC (`NSEvent` Global Monitor) |
+| Hotkey | Carbon `RegisterEventHotKey` (via `ctypes`, ohne Berechtigung) |
 | Paketmanager | [uv](https://docs.astral.sh/uv/) |
 | App-Bundle | [PyInstaller](https://pyinstaller.org/) |
