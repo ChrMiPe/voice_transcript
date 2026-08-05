@@ -18,6 +18,7 @@ a = Analysis(
         "voice_transcript.llm_server",
         "voice_transcript.permissions",
         "voice_transcript.panel",
+        "voice_transcript.glossary",
         "voice_transcript.applog",
         "rumps",
         "AppKit",

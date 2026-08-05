@@ -9,6 +9,7 @@ import sys
 import threading
 
 from voice_transcript.applog import log
+from voice_transcript.glossary import prompt_section
 from voice_transcript.config import (
     MIN_LENGTH_RATIO,
     MLX_MAX_TOKENS,
@@ -63,8 +64,10 @@ class LLMServer:
         """
         from mlx_lm import stream_generate
 
+        # Glossar bei jeder Anfrage frisch: so wirkt eine Aenderung an
+        # glossary.json sofort, ohne den Server neu zu starten.
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT + prompt_section()},
             {"role": "user", "content": USER_TEMPLATE.format(text=text)},
         ]
         prompt = self.tokenizer.apply_chat_template(

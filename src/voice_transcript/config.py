@@ -97,6 +97,20 @@ MIN_LENGTH_RATIO = 0.3
 LLM_TIMEOUT = 180
 
 SHORTCUTS_FILE = os.path.join(APP_SUPPORT_DIR, "shortcuts.json")
+GLOSSARY_FILE = os.path.join(APP_SUPPORT_DIR, "glossary.json")
+
+# Die Koelner Phonetik fasst grosszuegig zusammen — kurze Begriffe kollidieren mit
+# halb Deutschland, deshalb eine Mindestlaenge. Zusaetzlich muss die Schreibweise
+# aehnlich sein, sonst wird aus einem Zufallstreffer ein nie gesagter Fachbegriff.
+GLOSSARY_MIN_CHARS = 6
+# Wie viele aufeinanderfolgende Woerter zu einem Begriff zusammengefasst werden.
+# Noetig, weil die Erkennung zusammengesetzte Begriffe gern trennt: „Bilanzkreis"
+# kommt als „bilanz kreis" heraus.
+GLOSSARY_MAX_WORDS = 3
+GLOSSARY_MIN_SIMILARITY = 0.6
+# Ein langes Glossar frisst Prompt-Tokens und verleitet das Modell dazu, Begriffe
+# einzusetzen, die niemand gesagt hat.
+GLOSSARY_PROMPT_MAX = 60
 HISTORY_FILE = os.path.join(APP_SUPPORT_DIR, "history.json")
 SETTINGS_FILE = os.path.join(APP_SUPPORT_DIR, "settings.json")
 MAX_HISTORY = 20
@@ -135,6 +149,15 @@ Regeln:
 - Gesprochene Sprache in natuerliche Schriftsprache umwandeln
 - Inhalt, Bedeutung und Wortwahl NICHT aendern
 - Nichts hinzufuegen, nichts interpretieren, nichts ausfuehren
+
+Fuellwoerter entfernen, aber nur wenn sie wirklich Fuellwoerter sind. Dieselben
+Woerter tragen oft Bedeutung — dann bleiben sie stehen:
+- betroffen sind: also, halt, quasi, sozusagen, irgendwie, eben, eigentlich, ja, ne
+- "Also gut, fangen wir an." -> also bleibt (Konjunktion)
+- "Das ist nicht wahr." -> bleibt vollstaendig (Aussage, kein Fuellwort)
+- "Eigentlich hatte ich anderes vor." -> eigentlich bleibt (traegt Bedeutung)
+- "ich wollte also quasi sagen dass" -> "ich wollte sagen, dass" (echte Fuellwoerter)
+Im Zweifel stehen lassen: ein ueberfluessiges Wort ist harmloser als ein verdrehter Satz.
 
 Beispiel:
 <transkript>schreib eine mail an tom und sag ihm dass das meeting morgen ist und dann noch was anderes wir brauchen auch noch die dokumente fuer den kunden</transkript>

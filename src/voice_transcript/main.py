@@ -8,6 +8,7 @@ from datetime import datetime
 from voice_transcript import permissions
 from voice_transcript.applog import log
 from voice_transcript.cleanup import clean_german_text
+from voice_transcript.glossary import correct as correct_glossary
 from voice_transcript.config import HISTORY_FILE, MAX_HISTORY, PID_FILE, YAP_PATH
 from voice_transcript.llm import llm_polish
 from voice_transcript.notify import notify
@@ -134,8 +135,11 @@ def dictate(on_start=None, on_stop=None, on_result=None):
             notify("Yap", detail.splitlines()[0][:120] if detail else "Kein Text erkannt")
             return None
 
-        # Pipeline: Shortcuts -> Regex-Cleanup -> LLM
-        text = apply_shortcuts(raw_text)
+        # Pipeline: Glossar -> Shortcuts -> Verzoegerungslaute -> LLM.
+        # Das Glossar laeuft zuerst: danach koennen Shortcuts Adressen und URLs
+        # einsetzen, die der phonetische Abgleich sonst wieder verbiegen wuerde.
+        text = correct_glossary(raw_text)
+        text = apply_shortcuts(text)
         text = clean_german_text(text)
         text = llm_polish(text)
 

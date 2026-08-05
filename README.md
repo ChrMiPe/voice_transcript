@@ -102,6 +102,7 @@ Die App startet ohne Shortcuts. Die Beispieldatei aus dem Repo aktivieren:
 
 ```bash
 cp config/shortcuts.json ~/Library/Application\ Support/VoiceTranscript/
+cp config/glossary.json  ~/Library/Application\ Support/VoiceTranscript/
 ```
 
 Danach die App neu starten. Alternativ Shortcuts einzeln über das Menü anlegen.
@@ -244,6 +245,7 @@ Alles unter `~/Library/Application Support/VoiceTranscript/` (Menü → „Confi
 | Datei | Inhalt |
 |-------|--------|
 | `shortcuts.json` | Text-Shortcuts (`{"trigger": "ersetzung"}`) |
+| `glossary.json` | Fachbegriffe als Liste — phonetischer Abgleich **und** System-Prompt |
 | `settings.json` | Hotkey |
 | `history.json` | letzte 20 Diktate (Rohtext + Ergebnis + Zeitstempel) |
 | `project_dir` | Repo-Pfad, von `build.sh` geschrieben |
@@ -263,15 +265,19 @@ Findet die App `uv` oder `yap` nicht, lassen sich die Pfade überschreiben:
 
 ## Wie es funktioniert
 
-Ein Diktat durchläuft vier Stufen (`main.py: dictate()`):
+Ein Diktat durchläuft fünf Stufen (`main.py: dictate()`):
 
 1. **Aufnahme** — `yap dictate` als Subprozess, Transkript kommt über stdout. Ein zweiter
    Hotkey-Druck schickt `SIGINT` an die in `/tmp/yap_dictation.pid` notierte PID. Ob der Prozess
    dort noch lebt, wird geprüft — eine verwaiste PID-Datei aus einem Absturz hätte sonst den
    nächsten Hotkey-Druck verschluckt.
-2. **Shortcuts** — `shortcuts.py` ersetzt Trigger-Phrasen.
-3. **Füllwörter** — `cleanup.py` entfernt per Regex „ähm", „also", „quasi" und Ähnliches.
-4. **LLM** — `llm.py` schickt den Text an den lokalen Server; das Ergebnis geht ins Clipboard und
+2. **Fachbegriffe** — `glossary.py` zieht phonetisch passende Stellen auf die Begriffe aus
+   `glossary.json` (siehe unten). Läuft *vor* den Shortcuts, damit eingesetzte Adressen und URLs
+   nicht wieder verbogen werden.
+3. **Shortcuts** — `shortcuts.py` ersetzt Trigger-Phrasen.
+4. **Verzögerungslaute** — `cleanup.py` entfernt „ähm", „öhm", „hm". Nicht mehr: „also", „halt",
+   „ja", „eigentlich", „eben", „quasi". Die trugen zu oft Bedeutung (siehe unten).
+5. **LLM** — `llm.py` schickt den Text an den lokalen Server; das Ergebnis geht ins Clipboard und
    wird per AppleScript (`System Events`, `⌘V`) eingefügt.
 
 **Der LLM-Server** (`llm_server.py`) hält das Modell dauerhaft im RAM und lauscht auf dem
@@ -300,6 +306,61 @@ Ausgabe ist ungefähr so lang wie das Diktat.
 Das Modell schafft ~40 Tokens/s, das Budget-Maximum braucht also über eine Minute; `LLM_TIMEOUT`
 liegt deshalb bei 180 s statt der früheren 30. Fällt der Server ganz aus, greift ein
 Subprozess-Fallback (`llm_worker.py`); scheitert auch der, bekommst du den regex-bereinigten Text.
+
+## Fachvokabular
+
+Die Spracherkennung kennt kein Fachvokabular: aus „Kubernetes" wird „Kuberneetes". Dagegen wirken
+zwei Ebenen, die sich ergänzen — beide gespeist aus derselben Liste in `glossary.json`.
+
+**Phonetischer Abgleich** (`glossary.py`). Verglichen wird über die **Kölner Phonetik**, das deutsche
+Gegenstück zu Soundex: ähnlich klingende Wörter bekommen denselben Code, „Kuberneetes" und
+„Kubernetes" fallen zusammen. Gepflegt wird damit eine Begriffsliste, keine Fehlerliste.
+
+| Diktiert | Ergebnis |
+|---|---|
+| wir müssen das auf **kuberneetes** deployen | … auf **Kubernetes** deployen |
+| die **iddempotenz** fehlt | die **Idempotenz** fehlt |
+| der **bilanz kreis** stimmt nicht | der **Bilanzkreis** stimmt nicht |
+| die **continious integration** ist rot | die **Continuous Integration** ist rot |
+
+Der Code entsteht aus dem Begriff *ohne* Leerzeichen, und verglichen werden Wortgruppen bis
+`GLOSSARY_MAX_WORDS`. Nur so gehen beide Richtungen: „Active Directory" wird als zwei Wörter
+gesprochen, „Bilanzkreis" ist eines — kommt aber gern als „bilanz kreis" heraus.
+
+Drei Sicherungen gegen Falschtreffer, denn die Kölner Phonetik ist grob:
+
+- **Mindestlänge** (`GLOSSARY_MIN_CHARS`) — bei drei Buchstaben kollidiert ein Begriff mit halb Deutschland
+- **Schreibweise muss ähneln** (`GLOSSARY_MIN_SIMILARITY`) — sonst wird aus einem Zufallstreffer ein nie gesagter Fachbegriff
+- **Bei gleichem Code gewinnt der ähnlichste Begriff** — so bleibt „idempotent" das Adjektiv und wird nicht zu „Idempotenz"
+
+**System-Prompt** (`glossary.prompt_section`). Dieselbe Liste geht ins Modell, begrenzt auf
+`GLOSSARY_PROMPT_MAX` Begriffe, mit der ausdrücklichen Auflage, keinen Begriff einzusetzen, der nicht
+gesagt wurde. Das fängt, was die Phonetik verpasst — „aktive directory" etwa, weil die Kölner Regeln
+`c` und `k` an dieser Stelle unterschiedlich codieren:
+
+```
+diktiert : schau mal im aktive directory nach ob der nutzer da ist
+Ergebnis : Schau mal im Active Directory nach, ob der Nutzer da ist.
+```
+
+Das Glossar wird bei jeder Anfrage frisch gelesen — eine Änderung wirkt sofort, ohne Neustart.
+
+### Warum der Füllwörter-Filter geschrumpft ist
+
+`cleanup.py` entfernte einmal auch „also", „halt", „ja", „eigentlich", „eben", „quasi" und
+„nicht wahr" — per Regex, kontextblind:
+
+| Diktiert | Nach dem alten Filter |
+|---|---|
+| das ist **nicht wahr** | „das ist" |
+| ich **halt** das für richtig | „ich das für richtig" |
+| **eigentlich** hatte ich etwas anderes vor | „hatte ich etwas anderes vor" |
+
+Weil der Filter *vor* dem LLM lief, konnte das Modell nichts retten — es polierte den beschädigten
+Satz zu flüssigem, falschem Deutsch. Ob „also" Füllwort oder Konjunktion ist, entscheidet der
+Kontext; das kann ein Regex prinzipiell nicht und das Modell sehr wohl. Die Aufgabe steht jetzt im
+System-Prompt, mit Beispielen und der Regel „im Zweifel stehen lassen". Im Filter bleiben nur Laute,
+die in geschriebenem Deutsch nie ein Wort sind — die dürfen auch dann weg, wenn das LLM ausfällt.
 
 ## Entwicklung
 
