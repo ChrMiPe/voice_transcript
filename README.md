@@ -66,11 +66,35 @@ TCC-Datenbank, jeder direkte `INSERT` scheitert lautlos.
 Der **Hotkey braucht keine Berechtigung**: er wird über Carbon `RegisterEventHotKey` beim
 WindowServer registriert, nicht über einen Event-Monitor. Eingabeüberwachung ist damit hinfällig.
 
-Für die Bedienungshilfen genügt der Menüeintrag `⚠ Bedienungshilfen fehlen` — er öffnet den
-System-Dialog und trägt die App gleich in die Liste ein, dort nur noch den Schalter umlegen.
+Einen **Dialog gibt es für Bedienungshilfen nicht mehr** — aktuelle macOS-Versionen lehnen das ab:
 
-> Die Berechtigung überlebt einen Rebuild, solange die Bundle-ID gleich bleibt. `tccutil reset`
-> gehört deshalb **nicht** in `build.sh` — genau das hat sie früher bei jedem Build gelöscht.
+```
+tccd: Service kTCCServiceAccessibility does not allow prompting; returning Unknown
+tccd: Update Access Record: kTCCServiceAccessibility ... to Denied (System Set)
+```
+
+Der Aufruf ist trotzdem nötig, denn erst dieser `Denied`-Eintrag lässt die App in der Liste
+erscheinen. Den Rest macht der Menüeintrag `⚠ Bedienungshilfen fehlen`: er öffnet den richtigen
+Bereich, dort nur noch den Schalter umlegen.
+
+> **Nach jedem Rebuild neu erteilen.** Die Ad-hoc-Signatur (`codesign --sign -`) hat als Designated
+> Requirement einen nackten cdhash:
+>
+> ```
+> $ codesign -d -r- "/Applications/Voice Transcript.app"
+> # designated => cdhash H"ff05d124..."
+> ```
+>
+> TCC speichert diese Anforderung mit der Freigabe. Jeder Build erzeugt ein neues Binary und damit
+> einen neuen cdhash — die Freigabe passt danach nicht mehr, **obwohl der Schalter weiter aktiviert
+> aussieht**. Ein Haken, der nichts tut, ist die zeitraubendste Variante davon; deshalb räumt
+> `build.sh` den ungültigen Eintrag per `tccutil reset Accessibility` weg und öffnet den Bereich
+> gleich mit.
+>
+> Dauerhaft lösen ließe sich das nur mit einer stabilen Signatur-Identität (selbst signiertes
+> Zertifikat im Schlüsselbund statt `-`). `build.sh` nimmt sie über
+> `VOICE_TRANSCRIPT_SIGN_IDENTITY` entgegen und überspringt dann das Zurücksetzen. Ohne die
+> Variable bleibt alles ad-hoc — kein Eingriff in den Schlüsselbund.
 
 ### 3. Shortcuts übernehmen (optional)
 
@@ -130,7 +154,7 @@ Klick auf das Mikrofon-Icon:
 | **Letzte Diktate** | Untermenü, letzte 10 Diktate mit Uhrzeit; Klick kopiert ins Clipboard |
 | **Einstellungen** | Untermenü: `Hotkey ändern…`, `Shortcuts verwalten…`, `Config-Ordner öffnen`, `Historie löschen…` |
 | **LLM-Status** | ausgegraut, alle 5 s aktualisiert — siehe Tabelle unten |
-| **⚠ Bedienungshilfen fehlen** | erscheint **nur**, solange die Berechtigung fehlt; Klick öffnet den System-Dialog |
+| **⚠ Bedienungshilfen fehlen** | erscheint **nur**, solange die Berechtigung fehlt; Klick öffnet den Bereich in den Systemeinstellungen |
 | **Beenden (⌘Q)** | App und LLM-Server beenden |
 
 Der Hotkey steht als Text im Titel, weil ein echtes Key-Equivalent am `NSMenuItem` bei offenem
@@ -269,8 +293,15 @@ beim Start als Benachrichtigung und notiert es im Log
 Der Menütitel zeigt immer die aktuell registrierte Kombination.
 
 **„Text im Clipboard — bitte ⌘V drücken"**
-Bedienungshilfen fehlen. Im Menü `⚠ Bedienungshilfen fehlen` anklicken. Der Text liegt im
+Bedienungshilfen fehlen. Im Menü `⚠ Bedienungshilfen fehlen` anklicken, in der geöffneten Liste
+„Voice Transcript" aktivieren. Nach einem Rebuild ist der Eintrag ungültig, obwohl er aktiviert
+aussieht — dann aus- und wieder einschalten (siehe „Berechtigungen erteilen"). Der Text liegt im
 Clipboard, `⌘V` funktioniert also weiterhin.
+
+Das Einfügen prüft die Berechtigung **nicht** vorab, sondern versucht es und wertet erst den
+Fehlschlag aus: `AXIsProcessTrusted` liefert im laufenden Prozess einen veralteten Wert, ein
+Vorab-Check hätte das Einfügen also auch nach dem Erteilen weiter blockiert. Der genaue Grund steht
+in `app.log`.
 
 **„Kein Text erkannt"**
 `yap` liefert nichts. Direkt testen:
@@ -328,5 +359,6 @@ Die App setzt `LANG=de_DE.UTF-8` selbst. Falls doch: System-Locale auf UTF-8 pr�
 | LLM | [MLX](https://github.com/ml-explore/mlx) + [Qwen3-4B-4bit](https://huggingface.co/mlx-community/Qwen3-4B-4bit) |
 | Menüleiste | [rumps](https://github.com/jaredks/rumps) |
 | Hotkey | Carbon `RegisterEventHotKey` (via `ctypes`, ohne Berechtigung) |
+| Berechtigungs-Status | `AXIsProcessTrusted` (via `ctypes`, kein zusätzliches pyobjc-Paket) |
 | Paketmanager | [uv](https://docs.astral.sh/uv/) |
 | App-Bundle | [PyInstaller](https://pyinstaller.org/) |

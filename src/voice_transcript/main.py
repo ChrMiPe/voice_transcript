@@ -153,32 +153,36 @@ def dictate(on_start=None, on_stop=None, on_result=None):
         _clear_pid()
 
 
+PASTE_SCRIPT = 'tell application "System Events" to key code 9 using command down'
+
+
 def _paste_at_cursor():
     """Fuegt den Clipboard-Inhalt am Cursor ein (⌘V).
 
-    Ohne Bedienungshilfen-Recht wird der AppleEvent an System Events abgelehnt.
-    Vorher pruefen statt hinterher raten: der Nutzer bekommt dann die richtige
-    Meldung, und der Text liegt ohnehin schon im Clipboard.
+    Erst einfuegen, dann bei Misserfolg nach dem Grund fragen — nicht umgekehrt.
+    AXIsProcessTrusted liefert innerhalb eines laufenden Prozesses einen
+    gecachten Wert: erteilt man die Bedienungshilfen bei laufender App, bleibt
+    die Antwort "nein", bis die App neu startet. Ein Vorab-Check haette das
+    Einfuegen also auch dann verhindert, wenn es funktioniert haette.
     """
-    if not permissions.is_trusted():
-        log("Einfuegen uebersprungen — keine Bedienungshilfen-Rechte")
-        notify("Text im Clipboard", "Bedienungshilfen fehlen — bitte ⌘V druecken")
-        return False
-
     time.sleep(0.2)
 
-    paste_script = 'tell application "System Events" to key code 9 using command down'
-    res = subprocess.run(["osascript", "-e", paste_script], capture_output=True, text=True)
+    res = subprocess.run(["osascript", "-e", PASTE_SCRIPT], capture_output=True, text=True)
 
-    if res.returncode != 0:
-        detail = (res.stderr or "").strip()
-        log(f"Einfuegen fehlgeschlagen (exit {res.returncode}): {detail or '—'}")
-        notify("Text im Clipboard", "Einfuegen abgelehnt — bitte ⌘V druecken")
-        return False
+    if res.returncode == 0:
+        notify("Diktat", "Text eingefuegt!")
+        subprocess.Popen(["afplay", "/System/Library/Sounds/Purr.aiff"])
+        return True
 
-    notify("Diktat", "Text eingefuegt!")
-    subprocess.Popen(["afplay", "/System/Library/Sounds/Purr.aiff"])
-    return True
+    detail = (res.stderr or "").strip().replace("\n", " ")
+    trusted = permissions.is_trusted()
+    log(f"Einfuegen fehlgeschlagen (exit {res.returncode}, trusted={trusted}): {detail or '—'}")
+
+    if not trusted:
+        notify("Text im Clipboard", "Bedienungshilfen fehlen — bitte ⌘V drücken")
+    else:
+        notify("Text im Clipboard", "Einfügen abgelehnt — bitte ⌘V drücken")
+    return False
 
 
 def run_dictation():

@@ -169,6 +169,7 @@ class VoiceTranscriptApp(rumps.App):
         self._refresh_history()
         self._write_pid()
         self._register_hotkey()
+        self._check_accessibility_on_launch()
         self._start_llm_server()
 
         self._update_status()
@@ -238,18 +239,36 @@ class VoiceTranscriptApp(rumps.App):
             self.access_status_item.title = "⚠ Bedienungshilfen fehlen — klicken"
         self.access_status_item._menuitem.setHidden_(granted)
 
+    def _check_accessibility_on_launch(self):
+        """Beim Start pruefen, ob am Cursor eingefuegt werden darf.
+
+        Nach jedem Rebuild ist die Freigabe hin — die Ad-hoc-Signatur bindet sie an
+        den cdhash des Binaries (siehe build.sh). Ohne diese Meldung merkt man das
+        erst am ersten Diktat, das nur im Clipboard landet.
+
+        Die Systemeinstellungen werden hier absichtlich *nicht* geoeffnet: die App
+        startet auch per LaunchAgent bei jeder Anmeldung. Der Menueeintrag und
+        `build.sh` uebernehmen das, wo es erwartet wird.
+        """
+        if permissions.is_trusted():
+            log("Bedienungshilfen erteilt — Einfuegen am Cursor aktiv")
+            return
+
+        # Legt den TCC-Eintrag an, damit die App in der Liste steht.
+        permissions.ensure_listed()
+        log("Bedienungshilfen fehlen — Text landet nur im Clipboard")
+        notify("Voice Transcript", "Bedienungshilfen fehlen — Menü öffnen zum Aktivieren")
+
     def fix_accessibility(self, _):
         if permissions.is_trusted():
             notify("Voice Transcript", "Bedienungshilfen sind erteilt")
             return
 
-        # Der System-Dialog traegt die App in die Liste ein; ohne ihn muesste sie
-        # dort per "+" aus /Applications gesucht werden.
-        permissions.request_trust()
+        permissions.ensure_listed()
         permissions.open_settings()
         notify(
             "Voice Transcript",
-            "Bitte „Voice Transcript“ in den Bedienungshilfen aktivieren",
+            "„Voice Transcript“ in der Liste aktivieren, dann App neu starten",
         )
 
     def _write_pid(self):

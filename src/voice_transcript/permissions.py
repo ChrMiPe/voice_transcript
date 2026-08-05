@@ -36,11 +36,18 @@ def is_trusted():
     return bool(_ax.AXIsProcessTrusted())
 
 
-def request_trust():
-    """Zeigt den System-Dialog und traegt die App in die Bedienungshilfen-Liste ein.
+def ensure_listed():
+    """Sorgt dafuer, dass die App in der Bedienungshilfen-Liste auftaucht.
 
-    Ohne diesen Aufruf taucht die App in den Systemeinstellungen gar nicht auf
-    und muesste per "+" manuell aus /Applications gesucht werden.
+    Der Name sagt bewusst nicht "request": aktuelle macOS-Versionen zeigen fuer
+    Bedienungshilfen *keinen* Dialog mehr. tccd protokolliert das unmissverstaendlich:
+
+        Service kTCCServiceAccessibility does not allow prompting; returning Unknown
+        Update Access Record: kTCCServiceAccessibility ... to Denied (System Set)
+
+    Genau dieser Eintrag ist der Zweck des Aufrufs — mit ihm erscheint die App in
+    den Systemeinstellungen und der Nutzer muss nur den Schalter umlegen. Ohne ihn
+    fehlt sie in der Liste und muesste per "+" aus /Applications gesucht werden.
     """
     if _ax is None:
         return False
