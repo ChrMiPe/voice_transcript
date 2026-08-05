@@ -142,7 +142,15 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.voicetranscript.ap
 3. **`⌃⌘E` erneut drücken** — Icon zeigt Verarbeitung, dann wird der Text am Cursor eingefügt
    (Ton „Purr")
 
-Der Text liegt zusätzlich immer im Clipboard — wenn das Einfügen scheitert, reicht `⌘V`.
+**Scheitert das Einfügen, bleibt der Text im Clipboard** — dann reicht `⌘V`. Klappt es, wird deine
+vorherige Zwischenablage wiederhergestellt: ein Diktat soll nicht verbrauchen, was du kopiert
+hattest. Der Text bleibt in beiden Fällen über „Letzte Diktate" erreichbar.
+
+Zwei Einschränkungen dabei, beide bewusst: `pbpaste` liefert nur Klartext, deshalb wird nur
+nicht-leerer Text gesichert — ein Bild in der Zwischenablage bleibt unangetastet, statt durch
+Nichts ersetzt zu werden. Und zwischen Einfügen und Wiederherstellen liegt eine kurze Wartezeit
+(`PASTE_SETTLE_SECONDS`), weil `osascript` zurückkehrt, sobald das Tastenereignis abgeschickt ist —
+die Ziel-App liest die Zwischenablage erst danach.
 
 ### Menü
 
@@ -285,6 +293,12 @@ voice_transcript/
 ```
 
 ## Troubleshooting
+
+**Hotkey/Diktieren reagiert nicht mehr, Menü funktioniert**
+Früher konnte sich der Zustand verklemmen: fand `stop_dictation()` keinen laufenden `yap`-Prozess,
+blieb `_state` auf „Aufnahme"/„Verarbeitung" stehen und die App war bis zum Neustart taub. Der
+Zustand wird jetzt freigegeben, sobald der Diktat-Thread weg ist — `app.log` notiert das als
+„Verwaister Zustand … zurueckgesetzt". Läuft der Thread noch, bleibt die Sperre korrekt bestehen.
 
 **Hotkey tut nichts, Menü funktioniert**
 Der Hotkey braucht keine Berechtigung — eine andere App belegt die Kombination. Die App meldet das
