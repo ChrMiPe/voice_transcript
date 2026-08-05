@@ -27,20 +27,24 @@ echo "==> Repo-Pfad hinterlegen..."
 mkdir -p "$SUPPORT_DIR"
 printf '%s\n' "$SCRIPT_DIR" > "$SUPPORT_DIR/project_dir"
 
-echo "==> Berechtigungen zuruecksetzen..."
-tccutil reset Accessibility "$BUNDLE_ID" 2>/dev/null
-tccutil reset ListenEvent "$BUNDLE_ID" 2>/dev/null
-
-echo "==> Berechtigungen setzen..."
-# Bedienungshilfen + Eingabeueberwachung automatisch eintragen
-BINARY_PATH="$APP_PATH/Contents/MacOS/${APP_NAME}"
-sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
-  "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) VALUES ('kTCCServiceAccessibility', '$BUNDLE_ID', 0, 2, 0, 1, 0, 'UNUSED', 0, strftime('%s','now'));" 2>/dev/null || echo "   (Bedienungshilfen manuell hinzufuegen)"
-
-sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
-  "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) VALUES ('kTCCServiceListenEvent', '$BUNDLE_ID', 0, 2, 0, 1, 0, 'UNUSED', 0, strftime('%s','now'));" 2>/dev/null || echo "   (Eingabeueberwachung manuell hinzufuegen)"
+# Frueher stand hier `tccutil reset Accessibility` plus ein direkter INSERT in
+# die TCC.db. Der INSERT kann nicht funktionieren — die Datenbank ist von SIP
+# geschuetzt und nur fuer tccd schreibbar. Das Reset lief dagegen sehr wohl und
+# hat die einmal erteilten Bedienungshilfen bei *jedem* Build wieder entfernt.
+# Ergebnis: das Einfuegen am Cursor war nach jedem Rebuild kaputt.
+#
+# Die Bundle-ID bleibt stabil, deshalb ueberlebt die Berechtigung einen Rebuild,
+# solange man sie nicht aktiv zuruecksetzt. Der Hotkey braucht seit dem Umstieg
+# auf Carbon (siehe hotkey.py) ueberhaupt keine Berechtigung mehr.
 
 echo "==> Starten..."
 open "$APP_PATH"
+sleep 2
+
+echo "==> Status..."
+tail -5 "$SUPPORT_DIR/app.log" 2>/dev/null || true
+echo "   Log: $SUPPORT_DIR/app.log"
+echo "   Meldet das Menue \"Bedienungshilfen fehlen\", den Eintrag anklicken —"
+echo "   das ist nur fuer das Einfuegen am Cursor noetig, nicht fuer den Hotkey."
 
 echo "==> Fertig!"

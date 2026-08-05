@@ -121,14 +121,15 @@ info "App gebaut und installiert"
 
 # ─── Berechtigungen ───
 
-step "Berechtigungen einrichten..."
+step "Berechtigungen..."
 
-# Versuche automatisch zu setzen (klappt nicht immer wegen SIP)
-sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
-  "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) VALUES ('kTCCServiceAccessibility', '$BUNDLE_ID', 0, 2, 0, 1, 0, 'UNUSED', 0, strftime('%s','now'));" 2>/dev/null && info "Bedienungshilfen gesetzt" || warn "Bedienungshilfen muessen manuell gesetzt werden"
-
-sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
-  "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) VALUES ('kTCCServiceListenEvent', '$BUNDLE_ID', 0, 2, 0, 1, 0, 'UNUSED', 0, strftime('%s','now'));" 2>/dev/null && info "Eingabeueberwachung gesetzt" || warn "Eingabeueberwachung muss manuell gesetzt werden"
+# Kein Schreiben in die TCC.db: die ist SIP-geschuetzt und ausschliesslich fuer
+# tccd beschreibbar — der frueher hier stehende INSERT war immer ein No-op.
+# Mikrofon und Spracherkennung fragt macOS beim ersten Diktat selbst ab.
+# Eingabeueberwachung braucht die App nicht mehr (Carbon-Hotkey, siehe hotkey.py).
+info "Mikrofon-Zugriff wird beim ersten Diktat abgefragt"
+warn "Bedienungshilfen (nur fuer das Einfuegen am Cursor) erteilst du ueber den"
+warn "Menueeintrag \"Bedienungshilfen fehlen\" — er oeffnet den richtigen Dialog"
 
 # ─── Autostart einrichten ───
 
@@ -155,15 +156,14 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${GREEN} Voice Transcript wurde erfolgreich installiert!${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "Falls der Hotkey (Ctrl+Cmd+E) nicht funktioniert:"
+echo "Der Hotkey (Ctrl+Cmd+E) braucht keine Berechtigung."
+echo "Meldet das Menue, die Kombination sei belegt: im Menue"
+echo "'Hotkey aendern...' eine andere waehlen."
 echo ""
-echo "  1. Systemeinstellungen > Datenschutz & Sicherheit"
-echo "     > Eingabeueberwachung"
-echo "     → 'Voice Transcript' aktivieren"
-echo ""
-echo "  2. Systemeinstellungen > Datenschutz & Sicherheit"
-echo "     > Bedienungshilfen"
-echo "     → 'Voice Transcript' aktivieren"
+echo "Landet der Text nur im Clipboard, fehlen die Bedienungshilfen:"
+echo "  Menueleiste > '⚠ Bedienungshilfen fehlen' anklicken"
+echo "  → Systemeinstellungen oeffnen, 'Voice Transcript' aktivieren"
 echo ""
 echo "Die App laeuft in der Menueleiste (Mikrofon-Icon)."
+echo "Log bei Problemen: ~/Library/Application Support/VoiceTranscript/app.log"
 echo ""

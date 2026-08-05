@@ -16,6 +16,8 @@ a = Analysis(
         "voice_transcript.config",
         "voice_transcript.hotkey",
         "voice_transcript.llm_server",
+        "voice_transcript.permissions",
+        "voice_transcript.applog",
         "rumps",
         "AppKit",
         "Cocoa",
@@ -69,5 +71,11 @@ app = BUNDLE(
         "CFBundleShortVersionString": "0.1.0",
         "LSUIElement": True,
         "NSMicrophoneUsageDescription": "Voice Transcript benoetigt Mikrofon-Zugriff fuer Spracherkennung.",
+        # yap laeuft als Kindprozess, macOS rechnet dessen Zugriffe aber dieser
+        # App zu — die Beschreibungen muessen deshalb hier stehen.
+        "NSSpeechRecognitionUsageDescription": "Voice Transcript wandelt deine Sprache lokal in Text um.",
+        # Ohne diesen Schluessel lehnt macOS den AppleEvent an System Events ab,
+        # mit dem der fertige Text am Cursor eingefuegt wird.
+        "NSAppleEventsUsageDescription": "Voice Transcript fuegt den diktierten Text am Cursor ein.",
     },
 )

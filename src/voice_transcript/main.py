@@ -5,6 +5,8 @@ import subprocess
 import time
 from datetime import datetime
 
+from voice_transcript import permissions
+from voice_transcript.applog import log
 from voice_transcript.cleanup import clean_german_text
 from voice_transcript.config import HISTORY_FILE, MAX_HISTORY, PID_FILE, YAP_PATH
 from voice_transcript.llm import llm_polish
@@ -41,18 +43,48 @@ def load_history():
         return json.load(f)
 
 
-def stop_dictation():
-    if not os.path.exists(PID_FILE):
-        return False
+def _clear_pid():
+    try:
+        os.remove(PID_FILE)
+    except OSError:
+        pass
+
+
+def _running_pid():
+    """PID der laufenden yap-Aufnahme, oder None.
+
+    Prueft, ob der Prozess ueberhaupt noch lebt: nach einem Absturz bleibt die
+    PID-Datei liegen, und die alte Fassung meldete jede vorhandene Datei als
+    "laeuft". Der naechste Hotkey-Druck hat dann nur diese Leiche gestoppt statt
+    aufzunehmen — erst der zweite Druck startete ein Diktat.
+    """
     try:
         with open(PID_FILE, "r") as f:
             pid = int(f.read().strip())
+    except (OSError, ValueError):
+        _clear_pid()
+        return None
+
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        log(f"Verwaiste PID-Datei aufgeraeumt (PID {pid})")
+        _clear_pid()
+        return None
+
+    return pid
+
+
+def stop_dictation():
+    pid = _running_pid()
+    if pid is None:
+        return False
+    try:
         os.kill(pid, signal.SIGINT)
-    except Exception:
-        pass
+    except OSError as e:
+        log(f"SIGINT an yap (PID {pid}) fehlgeschlagen: {e}")
     finally:
-        if os.path.exists(PID_FILE):
-            os.remove(PID_FILE)
+        _clear_pid()
     return True
 
 
@@ -80,14 +112,18 @@ def dictate(on_start=None, on_stop=None, on_result=None):
         with open(PID_FILE, "w") as f:
             f.write(str(process.pid))
 
-        stdout, _ = process.communicate()
+        stdout, stderr = process.communicate()
         raw_text = stdout.strip()
 
         if on_stop:
             on_stop()
 
         if not raw_text:
-            notify("Yap", "Kein Text erkannt")
+            # yap meldet fehlenden Mikrofon- oder Spracherkennungs-Zugriff auf
+            # stderr — ohne Log war das von "nichts gesagt" nicht zu trennen.
+            detail = (stderr or "").strip()
+            log(f"yap ohne Ergebnis (exit {process.returncode}): {detail or '—'}")
+            notify("Yap", detail.splitlines()[0][:120] if detail else "Kein Text erkannt")
             return None
 
         # Pipeline: Shortcuts -> Regex-Cleanup -> LLM
@@ -99,19 +135,8 @@ def dictate(on_start=None, on_stop=None, on_result=None):
         cb = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
         cb.communicate(text.encode("utf-8"))
 
-        time.sleep(0.2)
-
-        # Einfuegen am Cursor (Cmd+V)
-        paste_script = 'tell application "System Events" to key code 9 using command down'
-        res = subprocess.run(["osascript", "-e", paste_script], capture_output=True, text=True)
-
-        if res.returncode != 0:
-            notify("Fehler", "Bitte Bedienungshilfen pruefen")
-        else:
-            notify("Diktat", "Text eingefuegt!")
-            subprocess.Popen(["afplay", "/System/Library/Sounds/Purr.aiff"])
-
         save_to_history(raw_text, text)
+        _paste_at_cursor()
 
         if on_result:
             on_result(text)
@@ -119,13 +144,41 @@ def dictate(on_start=None, on_stop=None, on_result=None):
         return text
 
     except Exception as e:
+        log(f"Diktat fehlgeschlagen: {type(e).__name__}: {e}")
         notify("Fehler", str(e))
         if on_stop:
             on_stop()
         return None
     finally:
-        if os.path.exists(PID_FILE):
-            os.remove(PID_FILE)
+        _clear_pid()
+
+
+def _paste_at_cursor():
+    """Fuegt den Clipboard-Inhalt am Cursor ein (⌘V).
+
+    Ohne Bedienungshilfen-Recht wird der AppleEvent an System Events abgelehnt.
+    Vorher pruefen statt hinterher raten: der Nutzer bekommt dann die richtige
+    Meldung, und der Text liegt ohnehin schon im Clipboard.
+    """
+    if not permissions.is_trusted():
+        log("Einfuegen uebersprungen — keine Bedienungshilfen-Rechte")
+        notify("Text im Clipboard", "Bedienungshilfen fehlen — bitte ⌘V druecken")
+        return False
+
+    time.sleep(0.2)
+
+    paste_script = 'tell application "System Events" to key code 9 using command down'
+    res = subprocess.run(["osascript", "-e", paste_script], capture_output=True, text=True)
+
+    if res.returncode != 0:
+        detail = (res.stderr or "").strip()
+        log(f"Einfuegen fehlgeschlagen (exit {res.returncode}): {detail or '—'}")
+        notify("Text im Clipboard", "Einfuegen abgelehnt — bitte ⌘V druecken")
+        return False
+
+    notify("Diktat", "Text eingefuegt!")
+    subprocess.Popen(["afplay", "/System/Library/Sounds/Purr.aiff"])
+    return True
 
 
 def run_dictation():
