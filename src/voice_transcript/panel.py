@@ -17,7 +17,12 @@ from AppKit import (
     NSEventModifierFlagControl,
     NSEventTypeRightMouseUp,
     NSFont,
+    NSFontAttributeName,
+    NSForegroundColorAttributeName,
     NSLineBreakByTruncatingTail,
+    NSMutableAttributedString,
+    NSMutableParagraphStyle,
+    NSParagraphStyleAttributeName,
     NSMakeRect,
     NSNoBorder,
     NSPopover,
@@ -79,6 +84,27 @@ def _label(text, y, size, weight, color, x=PAD, width=INNER,
     field.setAlignment_(align)
     field.setLineBreakMode_(NSLineBreakByTruncatingTail)
     return field
+
+
+def _titel(text, farbe):
+    """Attributierter Tastentitel — die einzige Faerbung, die bei einer bezelten
+    Taste wirklich zeichnet.
+
+    setBezelColor_ und setContentTintColor_ bleiben dort wirkungslos: gemessen 0 von
+    12.672 Pixeln rot. Der Aufnahme-Zustand war dadurch nicht zu erkennen, obwohl
+    bezelColor gesetzt *war* — ein Test, der nur die Eigenschaft abfragt, haette das
+    nie gefunden.
+    """
+    stil = NSMutableParagraphStyle.alloc().init()
+    stil.setAlignment_(NSTextAlignmentCenter)
+    return NSMutableAttributedString.alloc().initWithString_attributes_(
+        text,
+        {
+            NSForegroundColorAttributeName: farbe,
+            NSFontAttributeName: NSFont.systemFontOfSize_weight_(14, NSFontWeightMedium),
+            NSParagraphStyleAttributeName: stil,
+        },
+    )
 
 
 class PanelController(NSViewController):
@@ -143,9 +169,12 @@ class PanelController(NSViewController):
             root.addSubview_(button)
             self._status_buttons.append(button)
 
+        # 11pt sekundaer statt 10pt tertiaer: der Hinweis ist der einzige Weg, das
+        # Rechtsklick-Menue zu entdecken — dafuer war er die kleinste und blasseste
+        # Schrift im Panel.
         root.addSubview_(_label(
-            "Rechtsklick auf das Icon: Einstellungen", HINT_Y, 10,
-            NSFontWeightMedium, NSColor.tertiaryLabelColor(),
+            "Rechtsklick auf das Icon: Einstellungen", HINT_Y, 11,
+            NSFontWeightMedium, NSColor.secondaryLabelColor(),
         ))
 
         self.setView_(root)
@@ -168,12 +197,12 @@ class PanelController(NSViewController):
         sich nur nach einem Diktat.
         """
         state = self.delegate.panel_state()
-        self.dictate_button.setTitle_(self.delegate.panel_dictate_label())
         self.hotkey_label.setStringValue_(self.delegate.panel_hotkey_label())
 
-        # setBezelColor_ faerbt die Taste; None stellt das Standard-Aussehen her.
-        self.dictate_button.setBezelColor_(
-            NSColor.systemRedColor() if state in TINTED_STATES else None
+        farbe = (NSColor.systemRedColor() if state in TINTED_STATES
+                 else NSColor.labelColor())
+        self.dictate_button.setAttributedTitle_(
+            _titel(self.delegate.panel_dictate_label(), farbe)
         )
         self._refresh_status()
 
