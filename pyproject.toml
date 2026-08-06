@@ -4,6 +4,12 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "mlx-lm",
+    # Whisper laeuft im LLM-Server, nicht in der App — siehe build_app.spec.
+    # Zieht torch mit (~490 MB); das ist der Preis fuer die Fachvokabular-Erkennung.
+    "mlx-whisper",
+    # Fuer die eigene Mikrofonaufnahme (recorder.py). Klein (~1 MB) und muss ins
+    # App-Bundle, weil dort aufgenommen wird.
+    "pyobjc-framework-AVFoundation",
     "rumps",
     "pyinstaller",
 ]

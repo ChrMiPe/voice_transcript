@@ -10,7 +10,7 @@ import rumps
 from AppKit import NSColor, NSFontWeightRegular, NSImage, NSImageSymbolConfiguration
 from Foundation import NSOperationQueue, NSThread
 
-from voice_transcript import permissions
+from voice_transcript import asr, permissions
 from voice_transcript.applog import log
 from voice_transcript.config import (
     HISTORY_FILE,
@@ -160,6 +160,8 @@ class VoiceTranscriptApp(rumps.App):
         self.access_status_item = rumps.MenuItem(
             "Einfügen: Status wird geprüft…", callback=self.fix_accessibility
         )
+        self.engine_item = rumps.MenuItem("", callback=self.toggle_engine)
+        self._update_engine_item()
 
         # Diktieren steht allein oben; alles, was man selten braucht, liegt unter
         # "Einstellungen". Die Statuszeilen bilden eine leise Fusszeile.
@@ -171,6 +173,7 @@ class VoiceTranscriptApp(rumps.App):
                 rumps.MenuItem("Einstellungen"),
                 [
                     rumps.MenuItem("Hotkey ändern…", callback=self.change_hotkey),
+                    self.engine_item,
                     rumps.MenuItem("Shortcuts verwalten…", callback=self.manage_shortcuts),
                     rumps.MenuItem("Config-Ordner öffnen", callback=self.open_config_dir),
                     rumps.MenuItem("Historie löschen…", callback=self.clear_history),
@@ -372,6 +375,30 @@ class VoiceTranscriptApp(rumps.App):
             notify("Diktat", "In Clipboard kopiert!")
         else:
             notify("Diktat", "Kopieren fehlgeschlagen")
+
+    def _update_engine_item(self):
+        aktuell = asr.engine()
+        anderer = "yap" if aktuell == "whisper" else "whisper"
+        beschreibung = {
+            "whisper": "Whisper (Fachvokabular)",
+            "yap": "Apple Speech (schneller)",
+        }
+        self.engine_item.title = (
+            f"Erkennung: {beschreibung[aktuell]} → auf {beschreibung[anderer]}"
+        )
+
+    def toggle_engine(self, _):
+        """Schaltet zwischen Whisper und Apple Speech um.
+
+        Beide Wege bleiben nutzbar: Whisper erkennt Fachvokabular deutlich besser,
+        Apple Speech ist schneller und braucht keinen Speicher im Server.
+        """
+        neu = "yap" if asr.engine() == "whisper" else "whisper"
+        self.settings["asr_engine"] = neu
+        save_settings(self.settings)
+        self._update_engine_item()
+        log(f"Spracherkennung umgeschaltet auf: {neu}")
+        notify("Spracherkennung", f"Jetzt: {neu}")
 
     def _check_accessibility_on_launch(self):
         """Beim Start pruefen, ob am Cursor eingefuegt werden darf.

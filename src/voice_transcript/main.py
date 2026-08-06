@@ -5,11 +5,11 @@ import subprocess
 import time
 from datetime import datetime
 
-from voice_transcript import permissions
+from voice_transcript import asr, permissions
 from voice_transcript.applog import log
 from voice_transcript.cleanup import clean_german_text
 from voice_transcript.glossary import correct as correct_glossary
-from voice_transcript.config import HISTORY_FILE, MAX_HISTORY, PID_FILE, YAP_PATH
+from voice_transcript.config import HISTORY_FILE, MAX_HISTORY, PID_FILE
 from voice_transcript.llm import llm_polish
 from voice_transcript.notify import notify
 from voice_transcript.shortcuts import apply_shortcuts
@@ -85,6 +85,17 @@ def _running_pid():
 
 
 def stop_dictation():
+    """Stoppt eine laufende Aufnahme. True, wenn eine lief.
+
+    Zwei Wege, weil die Engines unterschiedlich aufnehmen: Whisper nimmt im eigenen
+    Prozess auf und wird direkt gestoppt, `yap` laeuft als Subprozess und bekommt
+    SIGINT. Der PID-Weg bleibt zusaetzlich, damit ein *anderer* Prozess (CLI,
+    Raycast) eine yap-Aufnahme beenden kann.
+    """
+    if asr.stop_active():
+        _clear_pid()
+        return True
+
     pid = _running_pid()
     if pid is None:
         return False
@@ -110,29 +121,22 @@ def dictate(on_start=None, on_stop=None, on_result=None):
     subprocess.Popen(["afplay", "/System/Library/Sounds/Tink.aiff"])
 
     try:
-        process = subprocess.Popen(
-            [YAP_PATH, "dictate"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-        )
+        session, benutzt = asr.start()
+        if session is None:
+            log(f"Aufnahme nicht startbar: {benutzt}")
+            notify("Fehler", str(benutzt)[:120])
+            return None
 
-        with open(PID_FILE, "w") as f:
-            f.write(str(process.pid))
-
-        stdout, stderr = process.communicate()
-        raw_text = stdout.strip()
+        raw_text, fehler = asr.finish(session)
 
         if on_stop:
             on_stop()
 
-        if not raw_text:
-            # yap meldet fehlenden Mikrofon- oder Spracherkennungs-Zugriff auf
-            # stderr — ohne Log war das von "nichts gesagt" nicht zu trennen.
-            detail = (stderr or "").strip()
-            log(f"yap ohne Ergebnis (exit {process.returncode}): {detail or '—'}")
-            notify("Yap", detail.splitlines()[0][:120] if detail else "Kein Text erkannt")
+        if fehler or not raw_text:
+            # Ohne Log war „nichts gesagt" nicht von „Mikrofon verweigert" zu
+            # unterscheiden — beides sah nach leerem Ergebnis aus.
+            log(f"Spracherkennung ({benutzt}) ohne Ergebnis: {fehler or '—'}")
+            notify("Spracherkennung", str(fehler or "Kein Text erkannt").splitlines()[0][:120])
             return None
 
         # Pipeline: Glossar -> Shortcuts -> Verzoegerungslaute -> LLM.

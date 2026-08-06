@@ -74,6 +74,18 @@ def project_dir():
 
     return os.path.expanduser("~/projects/voice_transcript")
 
+# ─── Spracherkennung ───
+# "whisper": eigene Aufnahme + Whisper im LLM-Server. Erkennt Fachvokabular
+#   deutlich besser, weil der Vokabular-Hinweis (initial_prompt) die Dekodierung
+#   vorspannt — gemessen 7/10 auf 10/10 Fachbegriffe gegenueber Apple Speech.
+#   Kostet ~1s Wartezeit pro 20s Diktat und 2,1 GB im Server.
+# "yap": Apple Speech. Schneller (59x Echtzeit) und ohne eigenen Speicher, kann
+#   aber kein Vokabular vorgespannt bekommen.
+# Faellt automatisch auf yap zurueck, wenn Whisper nicht erreichbar ist.
+ASR_ENGINE = "whisper"
+WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
+WHISPER_LANGUAGE = "de"
+
 MLX_MODEL = "mlx-community/Qwen3-4B-4bit"
 MLX_TEMPERATURE = 0.2
 LLM_ENABLED = True
@@ -120,6 +132,8 @@ DEFAULT_SETTINGS = {
         "key": "e",
         "modifiers": ["ctrl", "cmd"],
     },
+    # "whisper" oder "yap" — umschaltbar ohne Rebuild, siehe ASR_ENGINE oben.
+    "asr_engine": ASR_ENGINE,
 }
 
 

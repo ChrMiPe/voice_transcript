@@ -246,7 +246,7 @@ Alles unter `~/Library/Application Support/VoiceTranscript/` (Menü → „Confi
 |-------|--------|
 | `shortcuts.json` | Text-Shortcuts (`{"trigger": "ersetzung"}`) |
 | `glossary.json` | Fachbegriffe als Liste — phonetischer Abgleich **und** System-Prompt |
-| `settings.json` | Hotkey |
+| `settings.json` | Hotkey, `asr_engine` (`whisper` oder `yap`) |
 | `history.json` | letzte 20 Diktate (Rohtext + Ergebnis + Zeitstempel) |
 | `project_dir` | Repo-Pfad, von `build.sh` geschrieben |
 | `app.log` | Hotkey-Registrierung, `yap`-Fehler, abgelehntes Einfügen — die App hat als Bundle kein Terminal, hier landen die Details |
@@ -267,10 +267,11 @@ Findet die App `uv` oder `yap` nicht, lassen sich die Pfade überschreiben:
 
 Ein Diktat durchläuft fünf Stufen (`main.py: dictate()`):
 
-1. **Aufnahme** — `yap dictate` als Subprozess, Transkript kommt über stdout. Ein zweiter
-   Hotkey-Druck schickt `SIGINT` an die in `/tmp/yap_dictation.pid` notierte PID. Ob der Prozess
-   dort noch lebt, wird geprüft — eine verwaiste PID-Datei aus einem Absturz hätte sonst den
-   nächsten Hotkey-Druck verschluckt.
+1. **Aufnahme und Erkennung** — zwei Engines, umschaltbar (siehe „Spracherkennung"). Bei
+   `whisper` nimmt `recorder.py` selbst auf und der LLM-Server transkribiert; bei `yap` nimmt Apple
+   Speech selbst auf und wird per `SIGINT` gestoppt. Ob die in `/tmp/yap_dictation.pid` notierte PID
+   noch lebt, wird geprüft — eine verwaiste Datei aus einem Absturz hätte sonst den nächsten
+   Hotkey-Druck verschluckt.
 2. **Fachbegriffe** — `glossary.py` zieht phonetisch passende Stellen auf die Begriffe aus
    `glossary.json` (siehe unten). Läuft *vor* den Shortcuts, damit eingesetzte Adressen und URLs
    nicht wieder verbogen werden.
@@ -306,6 +307,50 @@ Ausgabe ist ungefähr so lang wie das Diktat.
 Das Modell schafft ~40 Tokens/s, das Budget-Maximum braucht also über eine Minute; `LLM_TIMEOUT`
 liegt deshalb bei 180 s statt der früheren 30. Fällt der Server ganz aus, greift ein
 Subprozess-Fallback (`llm_worker.py`); scheitert auch der, bekommst du den regex-bereinigten Text.
+
+## Spracherkennung
+
+Zwei Engines, umschaltbar über **Einstellungen → Erkennung** oder `asr_engine` in `settings.json`:
+
+| | Whisper (Standard) | Apple Speech (`yap`) |
+|---|---|---|
+| Fachvokabular | **Vokabular-Hinweis möglich** | nicht möglich |
+| Tempo | ~1 s pro 20 s Diktat | ~0,2 s |
+| Speicher | 2,1 GB im LLM-Server | eigener Systemdienst |
+| Download | 1,5 GB einmalig | keiner |
+
+Gemessen an einem deutschen Fachdiktat, live über das Mikrofon:
+
+| Engine | Fachbegriffe | Rohtext |
+|---|---|---|
+| **Whisper** | **6/6** | „auf Kubernetes … die Edempotenz der Migration" |
+| Apple Speech | 3/6 | „auf Kbertes … die Edenpotenz der Mration … Netzgelt nicht" |
+
+Der Unterschied ist nicht nur die Trefferquote: `yap` zerlegt bei laufender Aufnahme ganze Satzteile
+(doppelte Fragmente, abgeschnittene Wörter), und **solche Fehler kann keine nachgelagerte Stufe mehr
+reparieren** — „Kbertes" ist phonetisch zu weit von „Kubernetes" entfernt. „Edempotenz" fängt das
+Glossar dagegen problemlos.
+
+Whisper läuft **im LLM-Server**, nicht in der App: nur dort liegt MLX, das App-Bundle enthält es
+absichtlich nicht (24 MB statt mehrerer GB). Nebeneffekt: das Modell bleibt zwischen Diktaten warm,
+der Kaltstart von 1,3 s fällt nur beim ersten Diktat an. Die Aufnahme selbst passiert in der App
+über `AVAudioRecorder` (16 kHz Mono), das braucht nur `pyobjc-framework-AVFoundation` (~1 MB).
+
+### Rückfall auf yap
+
+Zweistufig, damit ein Whisper-Problem kein Diktat kostet:
+
+1. **Transkription scheitert** (Server aus, Modell fehlt, Antwort leer) → `yap transcribe` bekommt
+   **dieselbe Aufnahme**. Nichts muss wiederholt werden.
+2. **Schon die Aufnahme scheitert** (kein Mikrofon, AVFoundation fehlt) → `yap dictate` nimmt selbst
+   auf, wie vor der Umstellung.
+
+> Ein leeres Ergebnis zählt dabei ausdrücklich als Fehler. Ein Server, der die
+> Transkriptions-Anfrage noch nicht kennt, antwortet mit `ok` und leerem Text — ohne diese Regel
+> sah das nach „nichts gesagt" aus und der Rückfall lief nie an.
+
+`mlx-whisper` zieht `torch` mit (~490 MB im `.venv`). Das ist der Preis; im App-Bundle landet davon
+nichts.
 
 ## Fachvokabular
 
@@ -391,6 +436,8 @@ voice_transcript/
     ├── menubar.py                # Menüleisten-App (rumps), Einstiegspunkt
     ├── main.py                   # Diktat-Ablauf und Historie
     ├── hotkey.py                 # globaler Hotkey (Carbon), Keycode-Tabelle
+    ├── asr.py                    # Engine-Wahl Whisper/yap, zweistufiger Rückfall
+    ├── recorder.py               # Mikrofonaufnahme (AVAudioRecorder) für Whisper
     ├── panel.py                  # Popover-Panel am Statusitem (Linksklick)
     ├── permissions.py            # Bedienungshilfen-Status abfragen und anfordern
     ├── applog.py                 # Log nach Application Support
@@ -480,7 +527,8 @@ Die App setzt `LANG=de_DE.UTF-8` selbst. Falls doch: System-Locale auf UTF-8 pr�
 
 | Komponente | Technologie |
 |-----------|-------------|
-| Spracherkennung | [yap](https://github.com/finnvoor/yap) (Apple Speech Framework, on-device) |
+| Spracherkennung | [Whisper large-v3-turbo](https://huggingface.co/mlx-community/whisper-large-v3-turbo) via MLX, Rückfall [yap](https://github.com/finnvoor/yap) |
+| Aufnahme | `AVAudioRecorder` (PyObjC), 16 kHz Mono |
 | LLM | [MLX](https://github.com/ml-explore/mlx) + [Qwen3-4B-4bit](https://huggingface.co/mlx-community/Qwen3-4B-4bit) |
 | Menüleiste | [rumps](https://github.com/jaredks/rumps) (Menü) + `NSPopover` (Panel) |
 | Hotkey | Carbon `RegisterEventHotKey` (via `ctypes`, ohne Berechtigung) |
