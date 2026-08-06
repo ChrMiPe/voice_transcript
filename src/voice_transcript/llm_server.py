@@ -6,6 +6,7 @@ import os
 import re
 import socket
 import struct
+import sys
 import threading
 import time
 import wave
@@ -30,6 +31,17 @@ from voice_transcript.config import (
 
 SOCKET_PATH = "/tmp/voice_transcript_llm.sock"
 PID_FILE = "/tmp/voice_transcript_llm.pid"
+
+
+def _whisper_holder():
+    """mlx_whispers Modell-Halter, oder None wenn Whisper nie benutzt wurde.
+
+    Bewusst ueber sys.modules statt per import: ein `import mlx_whisper.transcribe`
+    nur zum Nachsehen kostet gemessen 0,56 s und laedt 1.500 Module — bei jeder
+    Statusabfrage waere das der falsche Preis fuer eine Ja/Nein-Frage.
+    """
+    modul = sys.modules.get("mlx_whisper.transcribe")
+    return getattr(modul, "ModelHolder", None) if modul is not None else None
 
 
 def strip_thinking(text):
@@ -75,13 +87,10 @@ class LLMServer:
             self.tokenizer = None
             self.sampler = None
 
-            try:
-                from mlx_whisper.transcribe import ModelHolder
-
-                ModelHolder.model = None
-                ModelHolder.model_path = None
-            except ImportError:
-                pass  # Whisper war nie geladen
+            halter = _whisper_holder()
+            if halter is not None:
+                halter.model = None
+                halter.model_path = None
 
             gc.collect()
             mx.clear_cache()
@@ -93,14 +102,11 @@ class LLMServer:
 
     def models_loaded(self):
         """Ob ueberhaupt etwas im Speicher liegt."""
-        whisper = False
-        try:
-            from mlx_whisper.transcribe import ModelHolder
-
-            whisper = ModelHolder.model is not None
-        except ImportError:
-            pass
-        return {"lm": self.model is not None, "whisper": whisper}
+        halter = _whisper_holder()
+        return {
+            "lm": self.model is not None,
+            "whisper": halter is not None and halter.model is not None,
+        }
 
     def _idle_timeout(self):
         """Aus der Konfiguration, damit eine Aenderung ohne Serverneustart wirkt."""

@@ -408,19 +408,32 @@ class VoiceTranscriptApp(rumps.App):
         )
 
     def unload_models(self, _):
-        """Gibt den Speicher der Modelle sofort frei.
+        """Gibt den Speicher der Modelle frei — im Hintergrund.
 
         Nuetzlich vor anderen lokalen Modellen: beide zusammen belegen gemessen
         4,49 GB. Sie laden beim naechsten Diktat von selbst wieder (1,1 s bzw.
         1,5 s), es geht also nichts verloren.
+
+        Der Aufruf wandert bewusst in einen Thread: der Server gibt erst frei, wenn
+        eine laufende Generierung fertig ist, und wartet dabei auf dieselbe Sperre.
+        Gemessen 5,2 s mitten in einer Bereinigung, bei einem langen Diktat
+        entsprechend mehr — auf dem Main-Thread waere die Menueleiste so lange
+        eingefroren.
         """
+        notify("Modelle", "Speicher wird freigegeben…")
+        threading.Thread(target=self._unload_models_worker, daemon=True).start()
+
+    def _unload_models_worker(self):
         frei, fehler = asr.unload_models()
         if fehler:
             log(f"Entladen fehlgeschlagen: {fehler}")
             notify("Modelle", f"Entladen fehlgeschlagen: {str(fehler)[:80]}")
             return
-        notify("Modelle", f"{frei:.2f} GB freigegeben")
-        self._update_status()
+        # Ein Server, der das Feld nicht kennt, liefert None — ohne diese Pruefung
+        # scheitert die Formatierung mit TypeError und die Meldung bleibt aus.
+        menge = f"{frei:.2f} GB" if isinstance(frei, (int, float)) else "Speicher"
+        notify("Modelle", f"{menge} freigegeben")
+        _on_main(self._update_status)
 
     def toggle_engine(self, _):
         """Schaltet zwischen Whisper und Apple Speech um.
