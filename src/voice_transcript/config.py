@@ -85,6 +85,19 @@ def project_dir():
 ASR_ENGINE = "whisper"
 WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 WHISPER_LANGUAGE = "de"
+# Eigene Konstante, nicht aus WHISPER_LANGUAGE zusammengesetzt: yap erwartet ein
+# vollstaendiges Locale, und f"{WHISPER_LANGUAGE}-DE" haette bei einer anderen
+# Sprache Unsinn wie "en-DE" ergeben.
+YAP_LOCALE = "de-DE"
+
+# Whisper nimmt nur die letzten ~224 Tokens des initial_prompt. Ein laengerer
+# Hinweis verliert seinen Anfang — gemessen 8/10 Begriffe, genau wie ohne Hinweis.
+# 700 Zeichen sind bei ~4,1 Zeichen/Token rund 170 Tokens, also mit Abstand drin.
+WHISPER_PROMPT_MAX_CHARS = 700
+
+# Kuerzere Aufnahmen gelten als Fehlgriff (Hotkey zweimal gestreift). Bei 16 kHz
+# Mono mit 16 bit sind das 32.000 Bytes pro Sekunde.
+MIN_AUDIO_BYTES = 16000
 
 MLX_MODEL = "mlx-community/Qwen3-4B-4bit"
 MLX_TEMPERATURE = 0.2

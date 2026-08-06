@@ -29,6 +29,7 @@ from voice_transcript.config import (
     ASR_ENGINE,
     LLM_TIMEOUT,
     PID_FILE,
+    YAP_LOCALE,
     YAP_PATH,
     load_settings,
 )
@@ -52,11 +53,9 @@ def engine():
 
 def _yap_transcribe_file(path):
     """Transkribiert eine fertige Aufnahme mit yap. Rueckgabe: (text, fehler)."""
-    from voice_transcript.config import WHISPER_LANGUAGE
-
     try:
         res = subprocess.run(
-            [YAP_PATH, "transcribe", path, "--locale", f"{WHISPER_LANGUAGE}-DE", "--txt"],
+            [YAP_PATH, "transcribe", path, "--locale", YAP_LOCALE, "--txt"],
             capture_output=True, text=True, encoding="utf-8",
             timeout=YAP_TRANSCRIBE_TIMEOUT,
         )
@@ -212,25 +211,28 @@ def start():
     """
     global _active
 
-    gewaehlt = engine()
-    session = None
-    benutzt = gewaehlt
-
-    if gewaehlt == "whisper":
-        session, fehler = _start_whisper()
-        if session is None:
-            # Stufe 2: nicht mal aufnehmen moeglich — yap nimmt selbst auf.
-            log(f"Aufnahme nicht startbar ({fehler}) — weiche auf yap dictate aus")
-            session, yap_fehler = _start_yap()
-            benutzt = "yap"
-            if session is None:
-                return None, f"{fehler} / {yap_fehler}"
-    else:
-        session, fehler = _start_yap()
-        if session is None:
-            return None, fehler
-
+    # Die Sperre umschliesst den *ganzen* Start, nicht nur die Zuweisung. Sonst
+    # liegt zwischen "Aufnahme laeuft" und "Sitzung registriert" ein Fenster, in
+    # dem stop_active() die Sitzung nicht findet und den Hotkey-Druck verschluckt —
+    # die Aufnahme lief dann weiter, ohne dass sie noch stoppbar war.
     with _active_lock:
+        gewaehlt = engine()
+        benutzt = gewaehlt
+
+        if gewaehlt == "whisper":
+            session, fehler = _start_whisper()
+            if session is None:
+                # Stufe 2: nicht mal aufnehmen moeglich — yap nimmt selbst auf.
+                log(f"Aufnahme nicht startbar ({fehler}) — weiche auf yap dictate aus")
+                session, yap_fehler = _start_yap()
+                benutzt = "yap"
+                if session is None:
+                    return None, f"{fehler} / {yap_fehler}"
+        else:
+            session, fehler = _start_yap()
+            if session is None:
+                return None, fehler
+
         _active = session
     return session, benutzt
 

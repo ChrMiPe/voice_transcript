@@ -5,7 +5,6 @@ import os
 import re
 import socket
 import struct
-import sys
 import threading
 import wave
 

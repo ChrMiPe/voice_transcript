@@ -24,6 +24,7 @@ from voice_transcript.config import (
     GLOSSARY_MIN_CHARS,
     GLOSSARY_MIN_SIMILARITY,
     GLOSSARY_PROMPT_MAX,
+    WHISPER_PROMPT_MAX_CHARS,
 )
 
 _UMLAUTE = {
@@ -237,11 +238,34 @@ def whisper_prompt(terms=None):
     Aufzaehlung und keine Anweisung: das Modell setzt hier keine Regeln um, es
     erwartet nur, solche Woerter zu hoeren. Gemessen hebt das die Trefferquote von
     8/10 auf 10/10 Fachbegriffe, ohne messbaren Zeitaufwand.
+
+    Die Laenge ist begrenzt, und das ist keine Vorsichtsmassnahme: Whisper nimmt nur
+    die letzten ~224 Tokens des Prompts. Ein zu langer Hinweis verliert also seinen
+    Anfang — gemessen 8/10 Begriffe, genau wie *ohne* jeden Hinweis. Lieber weniger
+    Begriffe mitschicken und das protokollieren als stumm wirkungslos werden.
     """
     terms = load_terms() if terms is None else terms
     if not terms:
         return ""
-    return "Fachbegriffe: " + ", ".join(terms[:GLOSSARY_PROMPT_MAX]) + "."
+
+    kopf, schluss = "Fachbegriffe: ", "."
+    budget = WHISPER_PROMPT_MAX_CHARS - len(kopf) - len(schluss)
+    passend, laenge = [], 0
+    for term in terms[:GLOSSARY_PROMPT_MAX]:
+        zusatz = len(term) + (2 if passend else 0)
+        if laenge + zusatz > budget:
+            break
+        passend.append(term)
+        laenge += zusatz
+
+    if not passend:
+        return ""
+    if len(passend) < len(terms):
+        log(
+            f"Whisper-Hinweis auf {len(passend)} von {len(terms)} Begriffen gekuerzt "
+            f"(Grenze {WHISPER_PROMPT_MAX_CHARS} Zeichen) — die vorderen zaehlen"
+        )
+    return kopf + ", ".join(passend) + schluss
 
 
 def prompt_section(terms=None):

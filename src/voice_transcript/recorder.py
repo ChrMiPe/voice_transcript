@@ -14,6 +14,7 @@ import os
 import tempfile
 
 from voice_transcript.applog import log
+from voice_transcript.config import MIN_AUDIO_BYTES
 
 # Whisper erwartet 16 kHz Mono — direkt so aufnehmen erspart das Umrechnen.
 SAMPLE_RATE = 16000
@@ -80,9 +81,15 @@ class Recorder:
             self._recorder = None
 
     def has_audio(self):
-        """True, wenn eine nicht-leere Datei entstanden ist."""
+        """True, wenn die Aufnahme lang genug ist, um transkribiert zu werden.
+
+        Nicht nur "Datei vorhanden": eine sofort gestoppte Aufnahme ergibt eine
+        WAV-Datei mit Kopfzeile und ein paar Millisekunden Stille (gemessen 4096
+        Bytes). Die haette Whisper *und* danach noch yap beschaeftigt, um am Ende
+        „Kein Text erkannt" zu melden.
+        """
         try:
-            return os.path.getsize(self.path) > 0
+            return os.path.getsize(self.path) >= MIN_AUDIO_BYTES
         except OSError:
             return False
 
