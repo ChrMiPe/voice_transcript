@@ -237,6 +237,9 @@ class PanelController(NSViewController):
             button.setBordered_(False)
             button.setAlignment_(NSTextAlignmentLeft)
             button.setFont_(NSFont.systemFontOfSize_weight_(12, NSFontWeightMedium))
+            # Reicht die Breite nicht, kuerzt die Taste am Ende statt hart zu
+            # beschneiden — der Delegate kuerzt schon vor, das hier ist die Reserve.
+            button.cell().setLineBreakMode_(NSLineBreakByTruncatingTail)
             # Der Index verbindet Taste und Eintrag — an eine NSButton-Instanz
             # laesst sich kein Python-Attribut haengen.
             button.setTag_(index)

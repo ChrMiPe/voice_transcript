@@ -105,8 +105,10 @@ HISTORY_LABEL_CHARS = 45
 
 # Wartezeit, bis rumps das Statusitem gebaut hat (Sekunden).
 PANEL_SETUP_INTERVAL = 0.2
-# Im Panel ist mehr Platz als in einem Menüeintrag.
-PANEL_LABEL_CHARS = 34
+# Im Panel ist mehr Platz als in einem Menüeintrag. 40 statt 34 Zeichen: im echten
+# Panel blieb rechts sichtbar Platz ungenutzt. Wird es doch zu lang, kuerzt die
+# Taste selbst (setLineBreakMode_ in panel.py).
+PANEL_LABEL_CHARS = 40
 
 
 def _on_main(fn):
@@ -349,12 +351,24 @@ class VoiceTranscriptApp(rumps.App):
         return entries
 
     def panel_status_lines(self):
-        lines = [{"text": self._llm_status_title(), "warn": "⚠" in self._llm_status_title()}]
+        titel = self._llm_status_title()
+        lines = [{"text": titel, "warn": "⚠" in titel}]
+
+        # Die zweite Zeile ist fuer die Warnung reserviert, damit das Panel nicht in
+        # der Hoehe springt. Fehlt die Warnung, stand dort eine leere Bandbreite —
+        # jetzt steht die benutzte Erkennung drin, die sonst nur im Rechtsklick-Menue
+        # sichtbar ist.
         if not permissions.is_trusted():
             lines.append({
                 "text": "⚠ Bedienungshilfen fehlen — klicken",
                 "warn": True,
                 "action": "accessibility",
+            })
+        else:
+            beschreibung = {"whisper": "Whisper", "yap": "Apple Speech"}
+            lines.append({
+                "text": f"Erkennung: {beschreibung.get(asr.engine(), asr.engine())}",
+                "warn": False,
             })
         return lines
 
