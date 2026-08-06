@@ -136,6 +136,11 @@ PANEL_SETUP_INTERVAL = 0.2
 # wenn der Server prinzipiell nicht hochkommt (uv fehlt, Repo verschoben).
 LLM_RESTART_INTERVAL = 60
 LLM_RESTART_MAX = 3
+
+# Takt fuer die laufenden Sekunden im Panel. Laeuft nur, solange aufgenommen wird
+# *und* das Panel offen ist — ein Dauertimer fuer eine Anzeige, die meist niemand
+# sieht, waere Verschwendung.
+ELAPSED_INTERVAL = 1
 # Nur eine Obergrenze gegen absurd lange Zeilen — die eigentliche Kuerzung macht
 # das Label selbst (setLineBreakMode_), damit *eine* Stelle entscheidet und nicht
 # zwei Ellipsen entstehen.
@@ -228,6 +233,8 @@ class VoiceTranscriptApp(rumps.App):
         self._panel_router = None
         self._llm_restart_versuche = 0
         self._llm_restart_zuletzt = 0.0
+        self._phase_started = None
+        self._elapsed_timer = None
 
         # super() hat gerade das PNG gesetzt — jetzt das SF-Symbol darueberlegen.
         # initializeStatusBar() liest _icon_nsimage beim Launch, der frueh gesetzte
@@ -335,6 +342,23 @@ class VoiceTranscriptApp(rumps.App):
         )
         return f"{DICTATE_LABELS[self._state]} ({hotkey_label})"
 
+    def panel_elapsed(self):
+        """Dauer der laufenden Phase als M:SS, oder None.
+
+        Waehrend der Aufnahme die Aufnahmedauer, danach die Wartezeit. Genau darum
+        geht es: bei einem fuenfminuetigen Diktat sind das rund 19 s Erkennung plus
+        bis zu 100 s Bereinigung, und ohne mitlaufende Zahl weiss man nicht, ob noch
+        etwas passiert. Der Zaehler laeuft ueber Erkennung und Bereinigung hinweg
+        weiter — gefragt ist "wie lange warte ich schon", nicht "wie lange dauert
+        dieser Teilschritt".
+        """
+        if self._phase_started is None:
+            return None
+        if self._state not in ("recording", "transcribing", "processing"):
+            return None
+        sekunden = int(time.monotonic() - self._phase_started)
+        return f"{sekunden // 60}:{sekunden % 60:02d}"
+
     def _set_state(self, state):
         """Zustand wechseln und Icon + Menü-Titel nachziehen.
 
@@ -342,12 +366,39 @@ class VoiceTranscriptApp(rumps.App):
         Sperre gegen ein zweites Diktat und darf nicht auf den Main-Thread warten.
         Nur die AppKit-Zugriffe wandern dorthin.
         """
+        # Neu anlaufen lassen bei Aufnahmebeginn und beim Uebergang in die
+        # Verarbeitung; von "transcribing" nach "processing" laeuft er weiter.
+        if state in ("recording", "transcribing") and self._state != state:
+            self._phase_started = time.monotonic()
         self._state = state
         _on_main(self._apply_state)
 
     def _apply_state(self):
         self._apply_icon()
         self.dictate_item.title = self._dictate_title()
+        self._sync_elapsed_timer()
+        self._refresh_panel_status()
+
+    def _sync_elapsed_timer(self):
+        """Sekundentakt nur waehrend der Aufnahme.
+
+        Der Timer aktualisiert die Dauer im Panel. Ausserhalb der Aufnahme gibt es
+        nichts zu zaehlen, also laeuft er dann auch nicht.
+        """
+        # Bewusst *ohne* Pruefung, ob das Panel offen ist: _tick_elapsed ruft nur
+        # refresh_status_if_open, das bei geschlossenem Panel sofort zurueckkehrt.
+        # Ein Aufruf pro Sekunde ist billiger als die Kopplung, die noetig waere,
+        # um den Timer beim Oeffnen und Schliessen mitzufuehren — und ein Timer, der
+        # dabei haengenbleibt, waere der schlimmere Fehler.
+        soll = self._state in ("recording", "transcribing", "processing")
+        if soll and self._elapsed_timer is None:
+            self._elapsed_timer = rumps.Timer(self._tick_elapsed, ELAPSED_INTERVAL)
+            self._elapsed_timer.start()
+        elif not soll and self._elapsed_timer is not None:
+            self._elapsed_timer.stop()
+            self._elapsed_timer = None
+
+    def _tick_elapsed(self, _=None):
         self._refresh_panel_status()
 
     def _apply_icon(self):

@@ -10,9 +10,9 @@ AppKit-Verdrahtung aus der Anwendungslogik heraus.
 
 Layout-Entscheidungen und was sie gekostet haben:
 
-- Der Hotkey steht *in* der Taste, rechtsbuendig ueber einen Tabstopp im
-  attributierten Titel. Frei darunter band er eine eigene Zeile und stellte den
-  Bezug nur her, indem er ihn behauptete.
+- Das Hauptelement zeichnet sich selbst (siehe _Primary) und zeigt rechts, was im
+  jeweiligen Zustand zaehlt: den Hotkey im Ruhezustand, die laufende Dauer waehrend
+  der Aufnahme, die Engine waehrend der Verarbeitung.
 - Keine Kopfzeile: wer das Panel oeffnet, hat gerade auf das Icon geklickt.
 - Eine Statuszeile statt dreier. Die Bedienungshilfen-Warnung *ersetzt* den
   LLM-Status und faerbt den Punkt; die Engine steht rechts.
@@ -26,7 +26,6 @@ Zusammen 92 pt weniger Hoehe als die erste Fassung (392 -> 300).
 """
 from AppKit import (
     NSApp,
-    NSBezelStyleRounded,
     NSBezierPath,
     NSColor,
     NSEventMaskLeftMouseUp,
@@ -34,25 +33,21 @@ from AppKit import (
     NSEventModifierFlagControl,
     NSEventTypeRightMouseUp,
     NSFont,
-    NSFontAttributeName,
     NSFontWeightMedium,
     NSFontWeightSemibold,
-    NSForegroundColorAttributeName,
     NSImage,
     NSLineBreakByTruncatingTail,
     NSMakeRect,
     NSMaxYEdge,
-    NSMutableAttributedString,
-    NSMutableParagraphStyle,
     NSNoBorder,
-    NSParagraphStyleAttributeName,
     NSPopover,
     NSPopoverBehaviorTransient,
+    NSProgressIndicator,
+    NSProgressIndicatorStyleBar,
     NSScrollView,
     NSTextAlignmentLeft,
     NSTextAlignmentRight,
     NSTextField,
-    NSTextTab,
     NSTrackingActiveInActiveApp,
     NSTrackingArea,
     NSTrackingInVisibleRect,
@@ -62,7 +57,7 @@ from AppKit import (
     NSButton,
 )
 import objc
-from Foundation import NSObject
+from Foundation import NSObject, NSPointInRect
 
 from voice_transcript.applog import log
 
@@ -73,7 +68,12 @@ INNER = WIDTH - 2 * PAD
 BUTTON_Y = 12
 BUTTON_H = 44
 BUTTON_PAD = 12          # Innenabstand der Taste; daran haengt auch der Tabstopp
-LIST_LABEL_Y = BUTTON_Y + BUTTON_H + 12
+# Der Balken bekommt seinen Platz in *jedem* Zustand, auch wenn er nur waehrend
+# Erkennung und Bereinigung sichtbar ist. Sonst springt das Panel in der Hoehe,
+# waehrend man darauf wartet — genau im falschen Moment.
+PROGRESS_Y = BUTTON_Y + BUTTON_H + 6
+PROGRESS_H = 4
+LIST_LABEL_Y = PROGRESS_Y + PROGRESS_H + 10
 LIST_Y = LIST_LABEL_Y + 18
 ROW_H = 30
 LIST_H = 6 * ROW_H       # sechs Zeilen sichtbar, der Rest scrollt
@@ -102,6 +102,9 @@ ENGINE_W = 92
 
 # Rot signalisiert die laufende Aufnahme — dieselbe Rolle wie beim Menueleisten-Icon.
 TINTED_STATES = ("recording",)
+# Waehrend dieser Zustaende arbeitet die App und das Hauptelement ist keine Taste
+# mehr: der Klick wuerde nichts tun, also soll es auch nicht wie eine aussehen.
+WORKING_STATES = ("transcribing", "processing")
 
 
 class _Flipped(NSView):
@@ -130,44 +133,100 @@ def _label(text, y, size, weight, color, x=PAD, width=INNER,
     return field
 
 
-def _tastentitel(name, hotkey, farbe):
-    """Attributierter Tastentitel: Name links, Hotkey rechtsbuendig.
+# ─────────────────────────── Hauptelement ───────────────────────────
 
-    Der Tabstopp macht die rechte Kante — geprueft: der Name endet bei x=141, der
-    Hotkey setzt bei x=479 wieder an.
+class _Primary(NSView):
+    """Diktier-Taste und Zustandsanzeige in einem, selbst gezeichnet.
 
-    Attributierte Titel sind ausserdem die einzige Faerbung, die bei einer bezelten
-    Taste ueberhaupt zeichnet: setBezelColor_ und setContentTintColor_ bleiben dort
-    wirkungslos, gemessen 0 von 12.672 Pixeln.
+    Eine eigene View, weil eine bezelte NSButton sich nicht faerben laesst:
+    setBezelColor_ *und* setContentTintColor_ bleiben dort wirkungslos, gemessen 0
+    von 12.672 Pixeln. Nur der attributierte Titel zeichnet — und ein weisser Titel
+    auf grauem Bezel waere unlesbar. Also den Hintergrund selbst malen.
+
+    Drei Erscheinungen, eine Flaeche:
+      Ruhe        Akzentfarbe gefuellt, Hotkey rechts — sieht wie die Hauptaktion aus
+      Aufnahme    Systemrot gefuellt, laufende Sekunden rechts
+      Arbeit      ruhig gefuellt, Phase links, Engine rechts; kein Klickziel
     """
-    stil = NSMutableParagraphStyle.alloc().init()
-    stil.setAlignment_(NSTextAlignmentLeft)
-    stil.setTabStops_([
-        NSTextTab.alloc().initWithTextAlignment_location_options_(
-            NSTextAlignmentRight, BUTTON_W - 2 * BUTTON_PAD, {}
-        )
-    ])
 
-    def teil(text, farbe_, font):
-        return NSMutableAttributedString.alloc().initWithString_attributes_(
-            text,
-            {
-                NSForegroundColorAttributeName: farbe_,
-                NSFontAttributeName: font,
-                NSParagraphStyleAttributeName: stil,
-            },
-        )
+    def isFlipped(self):
+        return True
 
-    titel = NSMutableAttributedString.alloc().init()
-    titel.appendAttributedString_(teil(
-        f"{name}\t", farbe, NSFont.systemFontOfSize_weight_(14, NSFontWeightMedium)
-    ))
-    if hotkey:
-        titel.appendAttributedString_(teil(
-            hotkey, NSColor.tertiaryLabelColor(),
-            NSFont.monospacedDigitSystemFontOfSize_weight_(11, NSFontWeightMedium),
-        ))
-    return titel
+    def acceptsFirstMouse_(self, _event):
+        return True
+
+    def hitTest_(self, punkt):
+        """Die Klickflaeche ist die ganze View, nicht ihre Labels.
+
+        Ohne diese Methode liefert hitTest_ das NSTextField obendrauf (gemessen), und
+        weder mouseDown_ noch mouseUp_ kommen hier an — die Zeile war damit gar nicht
+        anklickbar. Der Punkt kommt in Koordinaten des Superviews.
+        """
+        if NSPointInRect(punkt, self.frame()):
+            return self
+        return None
+
+    def mouseDown_(self, _event):
+        # Muss da sein, auch wenn sie nichts tut: NSResponder.mouseDown_ gibt das
+        # Ereignis standardmaessig an die naechste Instanz weiter, und dann kommt
+        # auch das zugehoerige mouseUp_ nicht mehr hier an. Gemessen: ohne diese
+        # Methode loeste ein echter Klick 0x aus. Meine frueheren Tests riefen
+        # mouseUp_ direkt auf und haben das vollstaendig verdeckt.
+        pass
+
+    def drawRect_(self, _rect):
+        if self.state in TINTED_STATES:
+            NSColor.systemRedColor().set()
+        elif self.state in WORKING_STATES:
+            NSColor.unemphasizedSelectedContentBackgroundColor().set()
+        else:
+            NSColor.controlAccentColor().set()
+        NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            self.bounds(), 7.0, 7.0
+        ).fill()
+
+    def mouseUp_(self, _event):
+        # Waehrend der Verarbeitung ist es kein Knopf — ein Klick soll nicht den
+        # Eindruck erwecken, er tue etwas.
+        if self.state in WORKING_STATES:
+            return
+        if self.on_click is not None:
+            self.on_click()
+
+    @objc.python_method
+    def apply(self, state, titel, detail):
+        self.state = state
+        gefuellt = state not in WORKING_STATES
+        vordergrund = (NSColor.alternateSelectedControlTextColor() if gefuellt
+                       else NSColor.labelColor())
+
+        self.titel_label.setStringValue_(titel)
+        self.titel_label.setTextColor_(vordergrund)
+        self.detail_label.setStringValue_(detail or "")
+        self.detail_label.setTextColor_(vordergrund.colorWithAlphaComponent_(0.78))
+        self.setNeedsDisplay_(True)
+
+
+def make_primary(on_click):
+    view = _Primary.alloc().initWithFrame_(
+        NSMakeRect(PAD, BUTTON_Y, BUTTON_W, BUTTON_H)
+    )
+    view.state = "idle"
+    view.on_click = on_click
+
+    hoehe = 20
+    y = (BUTTON_H - hoehe) / 2
+    view.titel_label = _label(
+        "", y, 14, NSFontWeightMedium, NSColor.labelColor(),
+        x=BUTTON_PAD, width=BUTTON_W - 2 * BUTTON_PAD - 62,
+    )
+    view.detail_label = _label(
+        "", y + 2, 11, NSFontWeightMedium, NSColor.labelColor(),
+        x=BUTTON_W - BUTTON_PAD - 62, width=62, align=NSTextAlignmentRight, mono=True,
+    )
+    view.addSubview_(view.titel_label)
+    view.addSubview_(view.detail_label)
+    return view
 
 
 # ─────────────────────────── Historienzeile ───────────────────────────
@@ -190,6 +249,17 @@ class _Row(NSView):
     def acceptsFirstMouse_(self, _event):
         # Im Popover soll der erste Klick schon kopieren und nicht bloss aktivieren.
         return True
+
+    def hitTest_(self, punkt):
+        """Wie bei _Primary: die ganze Zeile ist die Klickflaeche, nicht ihre Labels."""
+        if NSPointInRect(punkt, self.frame()):
+            return self
+        return None
+
+    def mouseDown_(self, _event):
+        # Siehe _Primary.mouseDown_: ohne sie beansprucht die View das Ereignis
+        # nicht und mouseUp_ kommt nie an.
+        pass
 
     def updateTrackingAreas(self):
         # Bei jeder Groessenaenderung neu setzen, sonst zeigt der alte Bereich auf
@@ -307,12 +377,18 @@ class PanelController(NSViewController):
     def _build(self):
         root = _Flipped.alloc().initWithFrame_(NSMakeRect(0, 0, WIDTH, HEIGHT))
 
-        self.dictate_button = NSButton.buttonWithTitle_target_action_(
-            "", self, "dictateClicked:"
+        self.primary = make_primary(self._primaer_geklickt)
+        root.addSubview_(self.primary)
+
+        # Unbestimmt, und das ist die ehrliche Form: weder Whisper noch das LLM
+        # liefern eine Quote. Der Balken sagt "es laeuft", nicht "so weit".
+        self.progress = NSProgressIndicator.alloc().initWithFrame_(
+            NSMakeRect(PAD, PROGRESS_Y, BUTTON_W, PROGRESS_H)
         )
-        self.dictate_button.setFrame_(NSMakeRect(PAD, BUTTON_Y, BUTTON_W, BUTTON_H))
-        self.dictate_button.setBezelStyle_(NSBezelStyleRounded)
-        root.addSubview_(self.dictate_button)
+        self.progress.setStyle_(NSProgressIndicatorStyleBar)
+        self.progress.setIndeterminate_(True)
+        self.progress.setHidden_(True)
+        root.addSubview_(self.progress)
 
         self.gear_button = NSButton.buttonWithTitle_target_action_(
             "", self, "gearClicked:"
@@ -394,15 +470,24 @@ class PanelController(NSViewController):
         sich nur nach einem Diktat.
         """
         state = self.delegate.panel_state()
-        farbe = (NSColor.systemRedColor() if state in TINTED_STATES
-                 else NSColor.labelColor())
-        self.dictate_button.setAttributedTitle_(_tastentitel(
-            self.delegate.panel_dictate_label(),
-            self.delegate.panel_hotkey_label(),
-            farbe,
-        ))
-
         self._status = self.delegate.panel_status()
+
+        # Rechts steht, was in diesem Zustand zaehlt: der Hotkey, solange man ihn
+        # druecken kann, sonst die laufende Dauer. Die Engine gehoert nicht hierher —
+        # sie steht schon in der Statuszeile, und doppelt gesagt ist nichts gewonnen.
+        if state in TINTED_STATES or state in WORKING_STATES:
+            detail = self.delegate.panel_elapsed() or ""
+        else:
+            detail = self.delegate.panel_hotkey_label()
+
+        self.primary.apply(state, self.delegate.panel_dictate_label(), detail)
+
+        arbeitet = state in WORKING_STATES
+        self.progress.setHidden_(not arbeitet)
+        if arbeitet:
+            self.progress.startAnimation_(None)
+        else:
+            self.progress.stopAnimation_(None)
         warnung = bool(self._status.get("warn"))
         self.status_dot.setTextColor_(
             NSColor.systemOrangeColor() if warnung else NSColor.systemGreenColor()
@@ -448,7 +533,8 @@ class PanelController(NSViewController):
         if 0 <= index < len(self._history):
             self.delegate.panel_copy(self._history[index]["text"])
 
-    def dictateClicked_(self, _sender):
+    @objc.python_method
+    def _primaer_geklickt(self):
         self.delegate.panel_toggle_dictation()
 
     def gearClicked_(self, _sender):
@@ -564,6 +650,12 @@ class Panel:
         return self.is_open
 
     def close(self):
+        # Den unbestimmten Balken anhalten: er zeichnet sonst unsichtbar weiter,
+        # solange die Verarbeitung laeuft.
+        try:
+            self.controller.progress.stopAnimation_(None)
+        except Exception as e:
+            log(f"Balken nicht anhaltbar: {type(e).__name__}: {e}")
         self.popover.performClose_(None)
 
     def toggle(self):
