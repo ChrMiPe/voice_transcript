@@ -100,7 +100,7 @@ fi
 step "App bauen..."
 
 # Laufende Instanz stoppen
-pkill -f "Voice Transcript" 2>/dev/null || true
+pkill -f "${APP_PATH}/Contents/MacOS/" 2>/dev/null || true
 sleep 1
 
 uv run pyinstaller build_app.spec --noconfirm 2>&1 | tail -5
@@ -109,7 +109,9 @@ uv run pyinstaller build_app.spec --noconfirm 2>&1 | tail -5
 rm -rf "$APP_PATH"
 cp -R "dist/${APP_NAME}.app" "$APP_PATH"
 
-# Signieren
+# Ad-hoc signieren. Ein Requirement auf die Bundle-ID zu setzen wuerde die
+# Bedienungshilfen-Freigabe *nicht* rebuild-fest machen — TCC prueft trotzdem einen
+# cdhash (gemessen, siehe build.sh) — und waere eine Aufweichung.
 codesign --force --deep --sign - "$APP_PATH"
 
 # Das Bundle enthaelt MLX nicht (siehe build_app.spec/excludes) — der LLM-Server

@@ -6,13 +6,22 @@
 # @raycast.packageName Dictation
 # @raycast.icon 🎙️
 
+"""Raycast-Script fuer ein einzelnes Diktat.
+
+Frueher schrieb dieses Script bei laufender Menueleisten-App eine Trigger-Datei
+nach /tmp/voice_transcript_trigger — die hat nie jemand gelesen, das Diktat startete
+also nicht. Der Pfad ist entfernt: das Script diktiert jetzt immer selbst.
+
+Fuer den Alltag ist der globale Hotkey der Weg; er braucht seit dem Umstieg auf
+Carbon keine Berechtigung mehr (siehe src/voice_transcript/hotkey.py).
+"""
+
 import os
 import shutil
 import subprocess
+import sys
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-MENUBAR_PID_FILE = "/tmp/voice_transcript_menubar.pid"
-TRIGGER_FILE = "/tmp/voice_transcript_trigger"
 
 
 def _find_uv():
@@ -31,15 +40,8 @@ def _find_uv():
     return shutil.which("uv") or "uv"
 
 
-UV_PATH = _find_uv()
-
-# Wenn Menubar-App laeuft: Trigger-Datei erstellen
-if os.path.exists(MENUBAR_PID_FILE):
-    with open(TRIGGER_FILE, "w") as f:
-        f.write("1")
-else:
-    # Fallback: direkt ausfuehren (ohne Menubar-App)
-    subprocess.run(
-        [UV_PATH, "run", "--project", PROJECT_DIR, "python", "-m", "voice_transcript"],
-        cwd=PROJECT_DIR,
-    )
+result = subprocess.run(
+    [_find_uv(), "run", "--project", PROJECT_DIR, "python", "-m", "voice_transcript"],
+    cwd=PROJECT_DIR,
+)
+sys.exit(result.returncode)

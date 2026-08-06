@@ -336,7 +336,10 @@ class LLMServer:
         if os.path.exists(SOCKET_PATH):
             os.remove(SOCKET_PATH)
 
-        self.load_model()
+        # Bewusst *nicht* hier laden. Frueher hielt der Server ab der Anmeldung
+        # 2,26 GB, auch wenn nie diktiert wurde — der Untaetigkeits-Timer haette erst
+        # nach zehn Minuten aufgeraeumt. generate() und transcribe() laden selbst
+        # nach; das erste Diktat kostet dadurch 1,1 s mehr, jedes weitere nichts.
 
         # PID schreiben
         with open(PID_FILE, "w") as f:

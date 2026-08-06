@@ -77,24 +77,27 @@ Der Aufruf ist trotzdem nötig, denn erst dieser `Denied`-Eintrag lässt die App
 erscheinen. Den Rest macht der Menüeintrag `⚠ Bedienungshilfen fehlen`: er öffnet den richtigen
 Bereich, dort nur noch den Schalter umlegen.
 
-> **Nach jedem Rebuild neu erteilen.** Die Ad-hoc-Signatur (`codesign --sign -`) hat als Designated
-> Requirement einen nackten cdhash:
+> **Nach jedem Rebuild neu erteilen — und zwar richtig.** Ad-hoc signiert wechselt der cdhash bei
+> jedem Build, und TCC bindet die Freigabe daran. Danach meldet die App „Bedienungshilfen fehlen",
+> **obwohl der Schalter in den Systemeinstellungen an ist**:
 >
 > ```
-> $ codesign -d -r- "/Applications/Voice Transcript.app"
-> # designated => cdhash H"ff05d124..."
+> tccd: matchesCodeRequirement: … from com.voicetranscript.app
+>       : cdhash H"d7541629…";  status: -67050        (errSecCSReqFailed)
 > ```
 >
-> TCC speichert diese Anforderung mit der Freigabe. Jeder Build erzeugt ein neues Binary und damit
-> einen neuen cdhash — die Freigabe passt danach nicht mehr, **obwohl der Schalter weiter aktiviert
-> aussieht**. Ein Haken, der nichts tut, ist die zeitraubendste Variante davon; deshalb räumt
-> `build.sh` den ungültigen Eintrag per `tccutil reset Accessibility` weg und öffnet den Bereich
-> gleich mit.
+> Gemessen: **den Schalter umzulegen ersetzt die gespeicherte Anforderung nicht**, und `tccutil reset
+> Accessibility` ebenfalls nicht — derselbe cdhash vor und nach dem Reset. Es hilft nur, den Eintrag
+> in der Liste zu **markieren und mit `−` zu entfernen**, dann mit `+` neu hinzuzufügen.
 >
-> Dauerhaft lösen ließe sich das nur mit einer stabilen Signatur-Identität (selbst signiertes
-> Zertifikat im Schlüsselbund statt `-`). `build.sh` nimmt sie über
-> `VOICE_TRANSCRIPT_SIGN_IDENTITY` entgegen und überspringt dann das Zurücksetzen. Ohne die
-> Variable bleibt alles ad-hoc — kein Eingriff in den Schlüsselbund.
+> Ein Designated Requirement auf die Bundle-ID (`codesign --requirements`) sieht wie die Lösung aus
+> und ist keine: TCC prüft trotzdem einen cdhash. `codesign` setzt das Requirement zwar stabil — dass
+> TCC es benutzt, ließ sich nicht zeigen. Und es wäre eine Aufweichung, denn mehrere Bundles können
+> dieselbe ID tragen (auf dieser Maschine drei).
+>
+> Rebuild-fest wird es nur mit einem echten Zertifikat: `VOICE_TRANSCRIPT_SIGN_IDENTITY` setzen, dann
+> lautet das Requirement `identifier "…" and certificate leaf = H"…"` und hängt am Schlüssel statt am
+> Binary.
 
 ### 3. Shortcuts übernehmen (optional)
 
@@ -430,6 +433,30 @@ Kontext; das kann ein Regex prinzipiell nicht und das Modell sehr wohl. Die Aufg
 System-Prompt, mit Beispielen und der Regel „im Zweifel stehen lassen". Im Filter bleiben nur Laute,
 die in geschriebenem Deutsch nie ein Wort sind — die dürfen auch dann weg, wenn das LLM ausfällt.
 
+## Tests
+
+```bash
+uv sync            # installiert pytest mit (Dev-Gruppe)
+uv run pytest      # 103 Tests, ~0,1 s
+```
+
+Getestet sind die reinen Funktionen — dort, wo Regressionen die Ausgabe *lautlos*
+verschlechtern:
+
+| Datei | Was festgehalten wird |
+|---|---|
+| `test_cleanup.py` | „das ist nicht wahr" und „ich halt das für richtig" müssen überleben |
+| `test_glossary.py` | Kölner Phonetik gegen kanonische Werte, Verhörungen, Falschtreffer, Prompt-Budget |
+| `test_shortcuts.py` | längere Trigger gewinnen; kaputte Datei kostet kein Diktat |
+| `test_history.py` | kaputte `history.json` verhindert den App-Start nicht |
+| `test_guards.py` | Token-Budget, Längen-Wächter, `<think>`-Blöcke |
+| `test_hotkey.py` | Keycode-Auflösung, Layout schlägt US-Tabelle, Fehlermeldungen |
+
+Zwei echte Fehler haben die Tests beim Schreiben gefunden: eine kaputte
+`shortcuts.json` riss das Diktat mit, und eine kaputte `history.json` verhinderte den
+**App-Start**, weil `_refresh_history()` schon in `__init__` läuft. Beide fingen keine
+Ausnahme.
+
 ## Entwicklung
 
 ```bash
@@ -541,10 +568,8 @@ Die App setzt `LANG=de_DE.UTF-8` selbst. Falls doch: System-Locale auf UTF-8 pr�
 - **Deutsch.** System-Prompt und Füllwörter-Filter sind auf Deutsch ausgelegt.
 - **Apple Silicon.** MLX gibt es nicht für Intel-Macs.
 - **Das Repo muss liegen bleiben** — siehe oben, die `.app` allein genügt nicht.
-- **`dictate.py` ist nur ein Fallback.** Läuft die Menüleisten-App, schreibt das Script lediglich
-  `/tmp/voice_transcript_trigger` — diese Datei liest derzeit niemand, das Diktat startet also
-  nicht. Ohne laufende App diktiert das Script korrekt. Für Raycast ist der globale Hotkey der
-  verlässliche Weg.
+- **`dictate.py` diktiert immer selbst.** Es startet einen eigenen Durchlauf, unabhängig von der
+  Menüleisten-App — braucht also auch das Modell neu. Für den Alltag ist der globale Hotkey der Weg.
 
 ## Technologie
 
