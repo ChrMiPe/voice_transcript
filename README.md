@@ -246,7 +246,7 @@ Alles unter `~/Library/Application Support/VoiceTranscript/` (Menü → „Confi
 |-------|--------|
 | `shortcuts.json` | Text-Shortcuts (`{"trigger": "ersetzung"}`) |
 | `glossary.json` | Fachbegriffe als Liste — phonetischer Abgleich **und** System-Prompt |
-| `settings.json` | Hotkey, `asr_engine` (`whisper` oder `yap`) |
+| `settings.json` | Hotkey, `asr_engine` (`whisper`/`yap`), `model_idle_timeout` (Sekunden, 0 = nie entladen) |
 | `history.json` | letzte 20 Diktate (Rohtext + Ergebnis + Zeitstempel) |
 | `project_dir` | Repo-Pfad, von `build.sh` geschrieben |
 | `app.log` | Hotkey-Registrierung, `yap`-Fehler, abgelehntes Einfügen — die App hat als Bundle kein Terminal, hier landen die Details |
@@ -335,6 +335,29 @@ Whisper läuft **im LLM-Server**, nicht in der App: nur dort liegt MLX, das App-
 absichtlich nicht (24 MB statt mehrerer GB). Nebeneffekt: das Modell bleibt zwischen Diktaten warm,
 der Kaltstart von 1,3 s fällt nur beim ersten Diktat an. Die Aufnahme selbst passiert in der App
 über `AVAudioRecorder` (16 kHz Mono), das braucht nur `pyobjc-framework-AVFoundation` (~1 MB).
+
+### Speicher freigeben
+
+Beide Modelle zusammen belegen gemessen **4,49 GB** (MLX aktiv + Cache). Wer den
+Speicher für andere lokale Modelle braucht, bekommt ihn zurück:
+
+| Aktion | Wirkung |
+|---|---|
+| **Einstellungen → Modelle entladen** | sofort, gemessen 4,49 GB → 0,00 GB |
+| `model_idle_timeout` in `settings.json` | automatisch nach N Sekunden ohne Nutzung (Standard 600, `0` schaltet ab) |
+
+Der Preis ist gering: **1,1 s** für das Sprachmodell, **1,5 s** für Whisper. Beide
+laden beim nächsten Diktat von selbst wieder, es geht nichts verloren. Die
+Statuszeile im Panel zeigt `LLM bereit — Modelle entladen`, solange der Speicher
+frei ist.
+
+> Referenzen löschen genügt **nicht**. MLX hat einen Caching-Allokator — die Puffer
+> wandern erst in den Cache und brauchen `mx.clear_cache()`. Und `mlx_whisper` hält
+> sein Modell in der Klassenvariable `ModelHolder.model`; ohne die zu leeren bleiben
+> 1,62 GB liegen, egal wie oft man den Cache leert.
+
+Statusabfragen zählen bewusst nicht als Nutzung — sonst hätte die Statuszeile der
+Menüleiste mit ihrer 5-Sekunden-Aktualisierung das Entladen dauerhaft verhindert.
 
 ### Rückfall auf yap
 

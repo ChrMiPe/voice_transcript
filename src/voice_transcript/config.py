@@ -121,6 +121,16 @@ MIN_LENGTH_RATIO = 0.3
 # in den Socket-Timeout laufen lassen.
 LLM_TIMEOUT = 180
 
+# Wie lange die Modelle nach der letzten Nutzung im Speicher bleiben (Sekunden).
+# Gemessen belegen beide zusammen 4,49 GB (MLX aktiv + Cache); nach dem Entladen
+# sind es 0,00 GB, und wieder einsatzbereit sind sie in 1,1 s (LLM) bzw. 1,5 s
+# (Whisper). Der Preis fuers Freigeben ist also gering — wer den Speicher fuer
+# andere lokale Modelle braucht, setzt den Wert niedrig.
+# 0 schaltet das Entladen ab: dann bleiben die Modelle dauerhaft geladen.
+MODEL_IDLE_TIMEOUT = 600
+# Wie oft der Server auf Untaetigkeit prueft.
+MODEL_IDLE_CHECK_INTERVAL = 30
+
 SHORTCUTS_FILE = os.path.join(APP_SUPPORT_DIR, "shortcuts.json")
 GLOSSARY_FILE = os.path.join(APP_SUPPORT_DIR, "glossary.json")
 
@@ -147,6 +157,8 @@ DEFAULT_SETTINGS = {
     },
     # "whisper" oder "yap" — umschaltbar ohne Rebuild, siehe ASR_ENGINE oben.
     "asr_engine": ASR_ENGINE,
+    # Sekunden bis zum Entladen der Modelle, 0 = nie. Ohne Rebuild aenderbar.
+    "model_idle_timeout": MODEL_IDLE_TIMEOUT,
 }
 
 

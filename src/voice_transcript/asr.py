@@ -111,16 +111,20 @@ def _start_yap():
 
 # ─── Whisper ───
 
-def _server_transcribe(path):
-    """Laesst den LLM-Server transkribieren. Rueckgabe: (text, fehler)."""
+def server_request(anfrage, timeout=LLM_TIMEOUT):
+    """Schickt eine Anfrage an den LLM-Server. Rueckgabe: (antwort, fehler).
+
+    Auch von menubar.py benutzt, um Modelle zu entladen und den Ladezustand
+    abzufragen — dasselbe Protokoll, nur eine andere `action`.
+    """
     if not os.path.exists(SOCKET_PATH):
         return None, "LLM-Server nicht erreichbar (kein Socket)"
 
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(LLM_TIMEOUT)
+    sock.settimeout(timeout)
     try:
         sock.connect(SOCKET_PATH)
-        payload = json.dumps({"action": "transcribe", "path": path}).encode("utf-8")
+        payload = json.dumps(anfrage).encode("utf-8")
         sock.sendall(struct.pack(">I", len(payload)) + payload)
 
         header = b""
@@ -146,7 +150,31 @@ def _server_transcribe(path):
 
     if not antwort.get("ok"):
         return None, antwort.get("error") or "Server meldet Fehler"
+    return antwort, None
+
+
+def _server_transcribe(path):
+    """Laesst den LLM-Server transkribieren. Rueckgabe: (text, fehler)."""
+    antwort, fehler = server_request({"action": "transcribe", "path": path})
+    if fehler:
+        return None, fehler
     return (antwort.get("result") or "").strip(), None
+
+
+def unload_models():
+    """Bittet den Server, beide Modelle freizugeben. Rueckgabe: (gb, fehler)."""
+    antwort, fehler = server_request({"action": "unload"}, timeout=60)
+    if fehler:
+        return None, fehler
+    return antwort.get("freed_gb"), None
+
+
+def model_status():
+    """Ladezustand der Modelle. Zaehlt beim Server nicht als Nutzung."""
+    antwort, fehler = server_request({"action": "status"}, timeout=10)
+    if fehler:
+        return None
+    return antwort
 
 
 class _WhisperSession:
