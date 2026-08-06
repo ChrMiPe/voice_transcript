@@ -8,19 +8,36 @@ import time
 from datetime import datetime
 
 import rumps
-from AppKit import NSColor, NSFontWeightRegular, NSImage, NSImageSymbolConfiguration
+from AppKit import (
+    NSAlert,
+    NSAlertFirstButtonReturn,
+    NSBezelBorder,
+    NSColor,
+    NSFont,
+    NSFontWeightRegular,
+    NSImage,
+    NSImageSymbolConfiguration,
+    NSMakeRect,
+    NSMakeSize,
+    NSScrollView,
+    NSTextView,
+    NSViewWidthSizable,
+)
 from Foundation import NSOperationQueue, NSThread
 
-from voice_transcript import asr, permissions
+from voice_transcript import asr, glossary, permissions
 from voice_transcript.applog import log
 from voice_transcript.config import (
+    GLOSSARY_FILE,
     HISTORY_FILE,
+    MODEL_IDLE_CHOICES,
     SHORTCUTS_FILE,
     UV_PATH,
     llm_enabled,
     load_settings,
-    push_to_talk,
+    model_idle_timeout,
     project_dir,
+    push_to_talk,
     save_settings,
 )
 from voice_transcript.hotkey import format_hotkey, register_hotkey
@@ -119,10 +136,60 @@ PANEL_SETUP_INTERVAL = 0.2
 # wenn der Server prinzipiell nicht hochkommt (uv fehlt, Repo verschoben).
 LLM_RESTART_INTERVAL = 60
 LLM_RESTART_MAX = 3
-# Im Panel ist mehr Platz als in einem Menüeintrag. 40 statt 34 Zeichen: im echten
-# Panel blieb rechts sichtbar Platz ungenutzt. Wird es doch zu lang, kuerzt die
-# Taste selbst (setLineBreakMode_ in panel.py).
-PANEL_LABEL_CHARS = 40
+# Nur eine Obergrenze gegen absurd lange Zeilen — die eigentliche Kuerzung macht
+# das Label selbst (setLineBreakMode_), damit *eine* Stelle entscheidet und nicht
+# zwei Ellipsen entstehen.
+PANEL_LABEL_CHARS = 90
+
+
+def _text_dialog(titel, hinweis, text, ok="Speichern", cancel="Abbrechen",
+                 groesse=(420, 260)):
+    """Mehrzeiliger Dialog mit *scrollbarem* Textfeld. Rueckgabe: Text oder None.
+
+    rumps.Window benutzt ein NSTextField. Das umbricht, scrollt aber nicht — bei
+    einer langen Begriffsliste kommt man an das Ende nicht heran. Hier steht deshalb
+    eine NSTextView in einer NSScrollView.
+
+    Automatische Ersetzungen sind ausgeschaltet, und das ist keine Kosmetik: die
+    Anfuehrungszeichen-Automatik macht aus geraden krumme, und die
+    Rechtschreibkorrektur verbiegt genau die Fachbegriffe, um die es hier geht.
+    """
+    scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(0, 0, *groesse))
+    scroll.setHasVerticalScroller_(True)
+    scroll.setAutohidesScrollers_(False)
+    scroll.setBorderType_(NSBezelBorder)
+
+    view = NSTextView.alloc().initWithFrame_(
+        NSMakeRect(0, 0, groesse[0], groesse[1])
+    )
+    view.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, NSFontWeightRegular))
+    view.setRichText_(False)
+    view.setAutomaticQuoteSubstitutionEnabled_(False)
+    view.setAutomaticDashSubstitutionEnabled_(False)
+    view.setAutomaticSpellingCorrectionEnabled_(False)
+    view.setAutomaticTextReplacementEnabled_(False)
+    view.setString_(text)
+    view.setMinSize_(NSMakeSize(0, groesse[1]))
+    view.setVerticallyResizable_(True)
+    view.setHorizontallyResizable_(False)
+    view.setAutoresizingMask_(NSViewWidthSizable)
+    view.textContainer().setWidthTracksTextView_(True)
+    scroll.setDocumentView_(view)
+
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_(titel)
+    alert.setInformativeText_(hinweis)
+    alert.setAlertStyle_(0)
+    alert.addButtonWithTitle_(ok)
+    if cancel:
+        alert.addButtonWithTitle_(cancel)
+    alert.setAccessoryView_(scroll)
+    # Ohne das landet der Fokus auf der Taste und man muss erst ins Feld klicken.
+    alert.window().setInitialFirstResponder_(view)
+
+    if alert.runModal() != NSAlertFirstButtonReturn:
+        return None
+    return str(view.string())
 
 
 def _on_main(fn):
@@ -178,15 +245,35 @@ class VoiceTranscriptApp(rumps.App):
         self.access_status_item = rumps.MenuItem(
             "Einfügen: Status wird geprüft…", callback=self.fix_accessibility
         )
-        self.engine_item = rumps.MenuItem("", callback=self.toggle_engine)
-        self.llm_item = rumps.MenuItem("", callback=self.toggle_llm)
-        self.ptt_item = rumps.MenuItem("", callback=self.toggle_ptt)
-        self._update_engine_item()
-        self._update_llm_item()
-        self._update_ptt_item()
+        # Umschalter als Auswahl mit Haken statt als Satz. „Erkennung: Whisper → auf
+        # Apple Speech" musste man zweimal lesen, um zu wissen, was gilt *und* was
+        # der Klick tut. Ein Haken sagt beides auf einen Blick.
+        self.engine_items = {
+            "whisper": rumps.MenuItem("Whisper", callback=self._pick_engine),
+            "yap": rumps.MenuItem("Apple Speech", callback=self._pick_engine),
+        }
+        for wert, item in self.engine_items.items():
+            item._wert = wert
+
+        self.ptt_items = {
+            False: rumps.MenuItem("Zweimal drücken", callback=self._pick_ptt),
+            True: rumps.MenuItem("Halten (Push-to-talk)", callback=self._pick_ptt),
+        }
+        for wert, item in self.ptt_items.items():
+            item._wert = wert
+
+        # Der Entlade-Zeitpunkt war bis hierher nur per Hand in settings.json
+        # erreichbar — und er entscheidet, wann 4,49 GB freigegeben werden.
+        self.idle_items = {}
+        for sekunden, text in MODEL_IDLE_CHOICES:
+            item = rumps.MenuItem(text, callback=self._pick_idle)
+            item._wert = sekunden
+            self.idle_items[sekunden] = item
+
+        self.llm_item = rumps.MenuItem("LLM-Bereinigung", callback=self.toggle_llm)
 
         # Diktieren steht allein oben; alles, was man selten braucht, liegt unter
-        # "Einstellungen". Die Statuszeilen bilden eine leise Fusszeile.
+        # „Einstellungen". Die Statuszeilen bilden eine leise Fusszeile.
         self.menu = [
             self.dictate_item,
             rumps.separator,
@@ -194,13 +281,21 @@ class VoiceTranscriptApp(rumps.App):
             [
                 rumps.MenuItem("Einstellungen"),
                 [
-                    rumps.MenuItem("Hotkey ändern…", callback=self.change_hotkey),
-                    self.engine_item,
+                    [rumps.MenuItem("Erkennung"), list(self.engine_items.values())],
+                    [rumps.MenuItem("Hotkey"), list(self.ptt_items.values()) + [
+                        rumps.separator,
+                        rumps.MenuItem("Kombination ändern…", callback=self.change_hotkey),
+                    ]],
+                    [rumps.MenuItem("Modelle im Speicher"), list(self.idle_items.values()) + [
+                        rumps.separator,
+                        rumps.MenuItem("jetzt entladen", callback=self.unload_models),
+                    ]],
+                    rumps.separator,
                     self.llm_item,
-                    self.ptt_item,
-                    rumps.MenuItem("Modelle entladen (Speicher freigeben)",
-                                   callback=self.unload_models),
+                    rumps.separator,
+                    rumps.MenuItem("Fachbegriffe verwalten…", callback=self.manage_glossary),
                     rumps.MenuItem("Shortcuts verwalten…", callback=self.manage_shortcuts),
+                    rumps.separator,
                     rumps.MenuItem("Config-Ordner öffnen", callback=self.open_config_dir),
                     rumps.MenuItem("Historie löschen…", callback=self.clear_history),
                 ],
@@ -210,6 +305,7 @@ class VoiceTranscriptApp(rumps.App):
             self.access_status_item,
             rumps.MenuItem("Beenden", callback=rumps.quit_application, key="q"),
         ]
+        self._update_settings_marks()
 
         self._refresh_history()
         self._write_pid()
@@ -339,6 +435,9 @@ class VoiceTranscriptApp(rumps.App):
         macOS es an der richtigen Stelle. Danach wieder abklemmen, sonst faengt es
         den naechsten Linksklick wieder ab.
         """
+        # Haken auffrischen: eine von Hand geaenderte settings.json soll sich nicht
+        # als veralteter Haken zeigen.
+        self._update_settings_marks()
         status_item = self._nsapp.nsstatusitem
         status_item.setMenu_(self._menu._menu)
         status_item.button().performClick_(None)
@@ -379,38 +478,36 @@ class VoiceTranscriptApp(rumps.App):
             })
         return entries
 
-    def panel_status_lines(self):
-        titel = self._llm_status_title()
-        lines = [{"text": titel, "warn": "⚠" in titel}]
+    def panel_status(self):
+        """Die eine Statuszeile: Punkt + Text links, Engine rechts.
 
-        # Die zweite Zeile ist fuer die Warnung reserviert, damit das Panel nicht in
-        # der Hoehe springt. Fehlt die Warnung, stand dort eine leere Bandbreite —
-        # jetzt steht die benutzte Erkennung drin, die sonst nur im Rechtsklick-Menue
-        # sichtbar ist.
+        Frueher standen hier drei Zeilen — LLM-Status, Bedienungshilfen-Warnung und
+        ein dauerhafter Rechtsklick-Hinweis — fuer 60 pt Hoehe. Die Warnung ist die
+        einzige, die ein Handeln verlangt, also verdraengt sie den LLM-Status; die
+        Engine passt daneben.
+        """
+        beschreibung = {"whisper": "Whisper", "yap": "Apple Speech"}
+        rechts = beschreibung.get(asr.engine(), asr.engine())
+
         if not permissions.is_trusted():
-            lines.append({
-                "text": "⚠ Bedienungshilfen fehlen — klicken",
+            return {
+                "text": "Bedienungshilfen fehlen — klicken",
                 "warn": True,
                 "action": "accessibility",
-            })
-        else:
-            beschreibung = {"whisper": "Whisper", "yap": "Apple Speech"}
-            lines.append({
-                "text": f"Erkennung: {beschreibung.get(asr.engine(), asr.engine())}",
-                "warn": False,
-            })
-        return lines
+                "right": rechts,
+            }
 
-    def panel_status_action(self, action):
-        if action == "accessibility":
-            self._panel.close()
-            self.fix_accessibility(None)
+        titel = self._llm_status_title()
+        return {"text": titel, "warn": "⚠" in titel, "right": rechts}
 
     def panel_toggle_dictation(self):
         # Das Panel schliessen: waehrend des Diktats liegt der Fokus sonst hier
         # statt im Zielfenster, und der Text wuerde am falschen Ort landen.
         self._panel.close()
         self.toggle_dictation()
+
+    def panel_open_settings(self):
+        self.open_settings_menu()
 
     def panel_copy(self, text):
         self._panel.close()
@@ -419,22 +516,55 @@ class VoiceTranscriptApp(rumps.App):
         else:
             notify("Diktat", "Kopieren fehlgeschlagen")
 
-    def _update_engine_item(self):
-        aktuell = asr.engine()
-        anderer = "yap" if aktuell == "whisper" else "whisper"
-        beschreibung = {
-            "whisper": "Whisper (Fachvokabular)",
-            "yap": "Apple Speech (schneller)",
-        }
-        self.engine_item.title = (
-            f"Erkennung: {beschreibung[aktuell]} → auf {beschreibung[anderer]}"
-        )
+    # ─── Einstellungen als Auswahl mit Haken ───
 
-    def _update_llm_item(self):
-        self.llm_item.title = (
-            "LLM-Bereinigung aus → einschalten" if not llm_enabled()
-            else "LLM-Bereinigung an → ausschalten"
-        )
+    def _update_settings_marks(self):
+        """Setzt die Haken auf den geltenden Wert.
+
+        Ein Haken beantwortet zwei Fragen auf einen Blick — was gilt, und was ein
+        Klick tun wuerde. Die frueheren Titel („Erkennung: Whisper → auf Apple
+        Speech") beantworteten die erste nur, indem man die zweite mitlas.
+        """
+        aktuelle_engine = asr.engine()
+        for wert, item in self.engine_items.items():
+            item.state = 1 if wert == aktuelle_engine else 0
+
+        halten = push_to_talk()
+        for wert, item in self.ptt_items.items():
+            item.state = 1 if wert == halten else 0
+
+        grenze = model_idle_timeout()
+        for wert, item in self.idle_items.items():
+            item.state = 1 if wert == grenze else 0
+
+        self.llm_item.state = 1 if llm_enabled() else 0
+
+    def _einstellung_setzen(self, schluessel, wert):
+        self.settings[schluessel] = wert
+        save_settings(self.settings)
+        self._update_settings_marks()
+        log(f"Einstellung {schluessel} = {wert!r}")
+
+    def _pick_engine(self, sender):
+        if sender._wert == asr.engine():
+            return
+        self._einstellung_setzen("asr_engine", sender._wert)
+        notify("Erkennung", sender.title)
+        self._refresh_panel_status()
+
+    def _pick_ptt(self, sender):
+        if sender._wert == push_to_talk():
+            return
+        self._einstellung_setzen("push_to_talk", sender._wert)
+        notify("Hotkey", sender.title)
+
+    def _pick_idle(self, sender):
+        """Entlade-Zeitpunkt. Der Server liest die Einstellung bei jeder Pruefung
+        neu, die Aenderung wirkt also ohne Neustart."""
+        if sender._wert == model_idle_timeout():
+            return
+        self._einstellung_setzen("model_idle_timeout", sender._wert)
+        notify("Modelle im Speicher", sender.title)
 
     def toggle_llm(self, _):
         """Schaltet die LLM-Bereinigung um.
@@ -443,10 +573,7 @@ class VoiceTranscriptApp(rumps.App):
         also nur per Rebuild aenderbar.
         """
         neu = not llm_enabled()
-        self.settings["llm_enabled"] = neu
-        save_settings(self.settings)
-        self._update_llm_item()
-        log(f"LLM-Bereinigung umgeschaltet auf: {neu}")
+        self._einstellung_setzen("llm_enabled", neu)
         notify("LLM-Bereinigung", "eingeschaltet" if neu else "ausgeschaltet")
         if neu:
             # Zaehler zuruecksetzen: das ausdrueckliche Einschalten ist die Bitte,
@@ -456,20 +583,28 @@ class VoiceTranscriptApp(rumps.App):
             self._start_llm_server()
         self._update_status()
 
-    def _update_ptt_item(self):
-        self.ptt_item.title = (
-            "Hotkey: halten → auf zweimal drücken" if push_to_talk()
-            else "Hotkey: zweimal drücken → auf halten"
-        )
+    def open_settings_menu(self):
+        """Klappt das Einstellungs-Untermenue am Zahnrad im Panel auf.
 
-    def toggle_ptt(self, _):
-        """Schaltet zwischen Halten und zweimal Druecken um."""
-        neu = not push_to_talk()
-        self.settings["push_to_talk"] = neu
-        save_settings(self.settings)
-        self._update_ptt_item()
-        log(f"Push-to-talk umgeschaltet auf: {neu}")
-        notify("Hotkey", "Halten zum Aufnehmen" if neu else "Zweimal drücken")
+        Dasselbe NSMenu wie beim Rechtsklick — kein zweiter Aufbau, keine doppelte
+        Pflege. Noetig wurde es, weil das verdichtete Panel den Hinweis
+        „Rechtsklick auf das Icon" verloren hat: die Einstellungen lagen danach
+        hinter einer Geste, die nichts mehr ankuendigt.
+        """
+        self._update_settings_marks()
+        if self._panel is not None:
+            self._panel.close()
+        eintrag = self.menu.get("Einstellungen")
+        untermenue = getattr(eintrag, "_menu", None)
+        if untermenue is None:
+            log("Einstellungs-Untermenue nicht gefunden — zeige das ganze Menue")
+            self._show_menu()
+            return
+        # Am Statusitem-Button aufklappen, damit es dort erscheint, wo das Panel war.
+        button = self._nsapp.nsstatusitem.button()
+        untermenue.popUpMenuPositioningItem_atLocation_inView_(
+            None, (0, button.bounds().size.height + 4), button
+        )
 
     def unload_models(self, _):
         """Gibt den Speicher der Modelle frei — im Hintergrund.
@@ -499,18 +634,36 @@ class VoiceTranscriptApp(rumps.App):
         notify("Modelle", f"{menge} freigegeben")
         _on_main(self._update_status)
 
-    def toggle_engine(self, _):
-        """Schaltet zwischen Whisper und Apple Speech um.
+    def manage_glossary(self, _):
+        """Fachbegriffe bearbeiten — einer pro Zeile.
 
-        Beide Wege bleiben nutzbar: Whisper erkennt Fachvokabular deutlich besser,
-        Apple Speech ist schneller und braucht keinen Speicher im Server.
+        Bis hierher gab es dafuer gar keine Oberflaeche, obwohl die Liste der
+        wirksamste Hebel im Projekt ist: sie hebt die Trefferquote bei Fachbegriffen
+        von 7/10 auf 10/10, weil sie sowohl Whispers Dekodierung vorspannt als auch
+        den phonetischen Abgleich speist.
         """
-        neu = "yap" if asr.engine() == "whisper" else "whisper"
-        self.settings["asr_engine"] = neu
-        save_settings(self.settings)
-        self._update_engine_item()
-        log(f"Spracherkennung umgeschaltet auf: {neu}")
-        notify("Spracherkennung", f"Jetzt: {neu}")
+        begriffe = glossary.load_terms()
+        text = _text_dialog(
+            "Fachbegriffe",
+            "Ein Begriff pro Zeile. Wirkt sofort, ohne Neustart.\n"
+            "Begriffe unter 6 Zeichen werden übergangen — zu kurz für den "
+            "phonetischen Abgleich.",
+            "\n".join(begriffe),
+        )
+        if text is None:
+            return
+
+        neu = [z.strip() for z in text.splitlines() if z.strip()]
+        try:
+            with open(GLOSSARY_FILE, "w", encoding="utf-8") as f:
+                json.dump(neu, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            log(f"Glossar nicht schreibbar: {e}")
+            notify("Fachbegriffe", "Konnte nicht gespeichert werden")
+            return
+
+        log(f"Glossar gespeichert: {len(neu)} Begriffe")
+        notify("Fachbegriffe", f"{len(neu)} gespeichert")
 
     def _check_accessibility_on_launch(self):
         """Beim Start pruefen, ob am Cursor eingefuegt werden darf.

@@ -132,6 +132,15 @@ LLM_TIMEOUT = 180
 MODEL_IDLE_TIMEOUT = 600
 # Wie oft der Server auf Untaetigkeit prueft.
 MODEL_IDLE_CHECK_INTERVAL = 30
+# Auswahl fuers Menue: Sekunden bis zum Entladen, 0 heisst nie. Bis hierher war der
+# Wert nur per Hand in settings.json erreichbar — und er entscheidet, wann 4,49 GB
+# freigegeben werden.
+MODEL_IDLE_CHOICES = (
+    (0, "immer geladen lassen"),
+    (600, "nach 10 Minuten entladen"),
+    (120, "nach 2 Minuten entladen"),
+    (30, "nach 30 Sekunden entladen"),
+)
 
 SHORTCUTS_FILE = os.path.join(APP_SUPPORT_DIR, "shortcuts.json")
 GLOSSARY_FILE = os.path.join(APP_SUPPORT_DIR, "glossary.json")
@@ -166,6 +175,19 @@ DEFAULT_SETTINGS = {
     # True: Hotkey halten nimmt auf, loslassen stoppt. False: zweimal druecken.
     "push_to_talk": False,
 }
+
+
+def model_idle_timeout():
+    """Sekunden bis zum Entladen der Modelle. 0 = nie.
+
+    Dieselbe Auswertung wie im Server (llm_server._idle_timeout), damit Menue und
+    Watchdog denselben Wert sehen.
+    """
+    try:
+        wert = int(load_settings().get("model_idle_timeout", MODEL_IDLE_TIMEOUT))
+    except (TypeError, ValueError):
+        return MODEL_IDLE_TIMEOUT
+    return max(0, wert)
 
 
 def push_to_talk():

@@ -158,31 +158,40 @@ die Ziel-App liest die Zwischenablage erst danach.
 
 ### Panel (Linksklick)
 
-Ein Linksklick auf das Icon öffnet ein Popover — kein Menü, sondern ein kleines Fenster:
+Ein Linksklick auf das Icon öffnet ein Popover — kein Menü, sondern ein kleines Fenster,
+**320 × 310 pt**:
 
 ```
-┌────────────────────────────────┐
-│  Voice Transcript              │
-│   ┌────────────────────────┐   │
-│   │   Diktieren            │   │  ← rot gefüllt während der Aufnahme
-│   └────────────────────────┘   │
-│            ⌃⌘⇧E                │
-│  Letzte Diktate                │
-│  ┌──────────────────────────┐  │
-│  │ 20:14  Hallo Tom, das …  │  │  ← Klick kopiert ins Clipboard
-│  │ 19:52  Wir brauchen no…  │  │
-│  └──────────────────────────┘  │
-│  LLM bereit                    │
-│  Rechtsklick auf das Icon: …   │
-└────────────────────────────────┘
+┌──────────────────────────────────┐
+│  ┌────────────────────────────┐  │
+│  │ Diktieren           ⌃⌘⇧E   │  │  ← Hotkey rechtsbündig in der Taste
+│  └────────────────────────────┘  │     Titel rot während der Aufnahme
+│  Letzte Diktate                  │
+│   11:00  Der Bilanzkreis für …   │
+│   10:05  Könnten wir es …  Kop…  │  ← Zeile unter dem Zeiger, weiß auf Blau
+│   00:30  Haben wir jetzt noch …  │
+│   00:29  Kurz zusammengefasst…   │
+│  ● LLM bereit           Whisper  │  ← eine Statuszeile, Engine rechts
+└──────────────────────────────────┘
 ```
 
 | Element | Funktion |
 |---------|----------|
-| **Diktier-Taste** | folgt dem Zustand („Aufnahme stoppen", „Wird verarbeitet…"), während der Aufnahme systemrot |
-| **Letzte Diktate** | die letzten 10, scrollbar; Klick kopiert ins Clipboard und schließt das Panel |
-| **Statuszeile** | LLM-Zustand, alle 5 s aktualisiert — siehe Tabelle unten |
-| **⚠ Bedienungshilfen fehlen** | nur solange die Berechtigung fehlt; Klick öffnet die Systemeinstellungen |
+| **Diktier-Taste** | folgt dem Zustand („Aufnahme stoppen", „Wird erkannt…", „Wird bereinigt…"), Titel systemrot während der Aufnahme; der Hotkey steht rechtsbündig darin |
+| **Letzte Diktate** | die letzten 10, scrollbar. Die Zeile unter dem Zeiger hebt sich hervor und zeigt rechts `Kopieren`; Klick kopiert und schließt das Panel |
+| **Statuszeile** | Punkt + LLM-Zustand links, benutzte Erkennung rechts. Fehlen die Bedienungshilfen, **ersetzt** die Warnung den LLM-Status und färbt den Punkt orange — ein Klick öffnet die Systemeinstellungen |
+
+Drei Entscheidungen, die Höhe gespart haben (392 → 310 pt):
+
+- **Der Hotkey steht in der Taste**, rechtsbündig über einen Tabstopp im attributierten Titel.
+  Frei darunter band er eine eigene Zeile und stellte den Bezug nur her, indem er ihn behauptete.
+- **Keine Kopfzeile.** Wer das Panel öffnet, hat gerade auf das Icon geklickt.
+- **Eine Statuszeile statt dreier** und kein dauerhafter Rechtsklick-Hinweis — eine
+  Gebrauchsanweisung für etwas, das man einmal lernt.
+
+Die Hervorhebung unter dem Zeiger braucht eine **eigene View mit `NSTrackingArea`**: ein randloser
+`NSButton` hebt sich nicht von selbst hervor und meldet kein Betreten. Der Platz für `Kopieren`
+wird nur im Hover reserviert — dauerhaft kostete er jede Zeile rund 20 Zeichen.
 
 ### Menü (Rechtsklick)
 
