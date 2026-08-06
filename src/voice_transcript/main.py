@@ -29,10 +29,7 @@ CLIPBOARD_TIMEOUT = 5
 
 
 def save_to_history(raw, result):
-    history = []
-    if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            history = json.load(f)
+    history = load_history()
 
     history.insert(0, {
         "raw": raw,
@@ -46,10 +43,24 @@ def save_to_history(raw, result):
 
 
 def load_history():
+    """Historie lesen. Bei Schaden eine leere Liste statt einer Ausnahme.
+
+    Wichtig, weil _refresh_history() schon in VoiceTranscriptApp.__init__ laeuft:
+    eine kaputte history.json hat die App gar nicht starten lassen.
+    """
     if not os.path.exists(HISTORY_FILE):
         return []
-    with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            daten = json.load(f)
+    except (OSError, ValueError) as e:
+        log(f"Historie nicht lesbar: {type(e).__name__}: {e}")
+        return []
+    if not isinstance(daten, list):
+        log("Historie hat unerwartetes Format — erwartet wird eine Liste")
+        return []
+    # Eintraege ohne "result" wuerden die Menue- und Panel-Anzeige zerlegen.
+    return [e for e in daten if isinstance(e, dict) and "result" in e]
 
 
 def _clear_pid():
@@ -81,7 +92,27 @@ def _running_pid():
         _clear_pid()
         return None
 
+    # Lebt da wirklich yap? PIDs werden wiederverwendet, und ein SIGINT an einen
+    # fremden Prozess ist schlimmer als ein verschluckter Hotkey-Druck.
+    if not _ist_yap(pid):
+        log(f"PID {pid} gehoert nicht mehr yap — Datei aufgeraeumt")
+        _clear_pid()
+        return None
+
     return pid
+
+
+def _ist_yap(pid):
+    """Prueft den Prozessnamen. Bei Zweifel False — lieber nichts signalisieren."""
+    try:
+        res = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "comm="],
+            capture_output=True, text=True, timeout=CLIPBOARD_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"Prozessname zu PID {pid} nicht ermittelbar: {e}")
+        return False
+    return os.path.basename((res.stdout or "").strip()) == "yap"
 
 
 def stop_dictation():
@@ -108,8 +139,13 @@ def stop_dictation():
     return True
 
 
-def dictate(on_start=None, on_stop=None, on_result=None):
-    """Fuehrt ein Diktat durch. Callbacks fuer UI-Updates."""
+def dictate(on_start=None, on_stop=None, on_polish=None, on_result=None):
+    """Fuehrt ein Diktat durch. Callbacks fuer UI-Updates.
+
+    on_stop meldet das Ende der Aufnahme (danach laeuft die Erkennung), on_polish
+    den Beginn der LLM-Bereinigung. Zwei Phasen, weil beide merklich dauern und ein
+    einziges "wird verarbeitet" nichts darueber sagt, wie weit es ist.
+    """
     if stop_dictation():
         if on_stop:
             on_stop()
@@ -145,6 +181,9 @@ def dictate(on_start=None, on_stop=None, on_result=None):
         text = correct_glossary(raw_text)
         text = apply_shortcuts(text)
         text = clean_german_text(text)
+
+        if on_polish:
+            on_polish()
         text = llm_polish(text)
 
         # Vor dem Ueberschreiben sichern, damit ein Diktat nicht die Zwischenablage

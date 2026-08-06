@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 
 import rumps
@@ -15,9 +16,10 @@ from voice_transcript.applog import log
 from voice_transcript.config import (
     HISTORY_FILE,
     SHORTCUTS_FILE,
-    LLM_ENABLED,
     UV_PATH,
+    llm_enabled,
     load_settings,
+    push_to_talk,
     project_dir,
     save_settings,
 )
@@ -46,18 +48,24 @@ ICON_RECORDING = _asset_path("recordingTemplate.png")
 ICON_PROCESSING = _asset_path("processingTemplate.png")
 MENUBAR_PID_FILE = "/tmp/voice_transcript_menubar.pid"
 
-ICONS = {"idle": ICON_IDLE, "recording": ICON_RECORDING, "processing": ICON_PROCESSING}
+ICONS = {"idle": ICON_IDLE, "recording": ICON_RECORDING,
+         "transcribing": ICON_PROCESSING, "processing": ICON_PROCESSING}
+# Seit Whisper dauert die Verarbeitung merklich: ein 5-Minuten-Diktat sind rund 19 s
+# Transkription plus bis zu 100 s Bereinigung. Ein einziges "Wird verarbeitet…" laesst
+# den Nutzer raten, ob noch etwas passiert.
 DICTATE_LABELS = {
     "idle": "Diktieren",
     "recording": "Aufnahme stoppen",
-    "processing": "Wird verarbeitet…",
+    "transcribing": "Wird erkannt…",
+    "processing": "Wird bereinigt…",
 }
 
 # SF Symbols statt der gezeichneten 22px-PNGs: Vektoren, scharf in jeder Groesse.
 # Der Aufnahme-Zustand wird eingefaerbt — die PNGs enthielten zwar einen roten
 # Punkt, doch bei template=True verwirft macOS jede Farbe und zeichnet nur die
 # Alpha-Maske. Das Rot war also nie zu sehen.
-SYMBOLS = {"idle": "mic", "recording": "mic.fill", "processing": "waveform"}
+SYMBOLS = {"idle": "mic", "recording": "mic.fill",
+           "transcribing": "waveform", "processing": "waveform"}
 COLORED_STATES = ("recording",)
 SYMBOL_POINT_SIZE = 15
 _SYMBOL_SCALE_MEDIUM = 2  # NSImageSymbolScaleMedium
@@ -105,6 +113,12 @@ HISTORY_LABEL_CHARS = 45
 
 # Wartezeit, bis rumps das Statusitem gebaut hat (Sekunden).
 PANEL_SETUP_INTERVAL = 0.2
+
+# Rücknahme für den Server-Neustart. Ohne sie versuchte der 5-Sekunden-Timer es
+# gemessen 12x pro Minute — samt Benachrichtigung je Versuch, also 720 pro Stunde,
+# wenn der Server prinzipiell nicht hochkommt (uv fehlt, Repo verschoben).
+LLM_RESTART_INTERVAL = 60
+LLM_RESTART_MAX = 3
 # Im Panel ist mehr Platz als in einem Menüeintrag. 40 statt 34 Zeichen: im echten
 # Panel blieb rechts sichtbar Platz ungenutzt. Wird es doch zu lang, kuerzt die
 # Taste selbst (setLineBreakMode_ in panel.py).
@@ -145,6 +159,8 @@ class VoiceTranscriptApp(rumps.App):
         # AttributeError fehl und die App startet gar nicht.
         self._panel = None
         self._panel_router = None
+        self._llm_restart_versuche = 0
+        self._llm_restart_zuletzt = 0.0
 
         # super() hat gerade das PNG gesetzt — jetzt das SF-Symbol darueberlegen.
         # initializeStatusBar() liest _icon_nsimage beim Launch, der frueh gesetzte
@@ -163,7 +179,11 @@ class VoiceTranscriptApp(rumps.App):
             "Einfügen: Status wird geprüft…", callback=self.fix_accessibility
         )
         self.engine_item = rumps.MenuItem("", callback=self.toggle_engine)
+        self.llm_item = rumps.MenuItem("", callback=self.toggle_llm)
+        self.ptt_item = rumps.MenuItem("", callback=self.toggle_ptt)
         self._update_engine_item()
+        self._update_llm_item()
+        self._update_ptt_item()
 
         # Diktieren steht allein oben; alles, was man selten braucht, liegt unter
         # "Einstellungen". Die Statuszeilen bilden eine leise Fusszeile.
@@ -176,6 +196,8 @@ class VoiceTranscriptApp(rumps.App):
                 [
                     rumps.MenuItem("Hotkey ändern…", callback=self.change_hotkey),
                     self.engine_item,
+                    self.llm_item,
+                    self.ptt_item,
                     rumps.MenuItem("Modelle entladen (Speicher freigeben)",
                                    callback=self.unload_models),
                     rumps.MenuItem("Shortcuts verwalten…", callback=self.manage_shortcuts),
@@ -208,7 +230,7 @@ class VoiceTranscriptApp(rumps.App):
     @property
     def recording(self):
         """Blockiert ein zweites Diktat — auch während noch verarbeitet wird."""
-        return self._state in ("recording", "processing")
+        return self._state in ("recording", "transcribing", "processing")
 
     def _dictate_title(self):
         hotkey_label = format_hotkey(
@@ -249,7 +271,7 @@ class VoiceTranscriptApp(rumps.App):
 
     def _llm_status_title(self):
         # Symbol nur, wenn etwas zu tun ist — sonst wird die Fusszeile zum Jahrmarkt.
-        if not LLM_ENABLED:
+        if not llm_enabled():
             return "LLM-Bereinigung aus"
         # Die PID-Datei schreibt der Server erst nach dem Modell-Laden, der Socket
         # kommt unmittelbar danach — daraus lässt sich "lädt noch" ableiten.
@@ -264,6 +286,7 @@ class VoiceTranscriptApp(rumps.App):
         return "⚠ LLM nicht erreichbar"
 
     def _update_status(self, _=None):
+        self._restart_llm_server_if_dead()
         self.llm_status_item.title = self._llm_status_title()
         self._refresh_panel_status()
 
@@ -407,6 +430,47 @@ class VoiceTranscriptApp(rumps.App):
             f"Erkennung: {beschreibung[aktuell]} → auf {beschreibung[anderer]}"
         )
 
+    def _update_llm_item(self):
+        self.llm_item.title = (
+            "LLM-Bereinigung aus → einschalten" if not llm_enabled()
+            else "LLM-Bereinigung an → ausschalten"
+        )
+
+    def toggle_llm(self, _):
+        """Schaltet die LLM-Bereinigung um.
+
+        Aus bleibt nur der Verzoegerungslaut-Filter. War bisher eine Code-Konstante,
+        also nur per Rebuild aenderbar.
+        """
+        neu = not llm_enabled()
+        self.settings["llm_enabled"] = neu
+        save_settings(self.settings)
+        self._update_llm_item()
+        log(f"LLM-Bereinigung umgeschaltet auf: {neu}")
+        notify("LLM-Bereinigung", "eingeschaltet" if neu else "ausgeschaltet")
+        if neu:
+            # Zaehler zuruecksetzen: das ausdrueckliche Einschalten ist die Bitte,
+            # es noch einmal zu versuchen.
+            self._llm_restart_versuche = 0
+            self._llm_restart_zuletzt = 0.0
+            self._start_llm_server()
+        self._update_status()
+
+    def _update_ptt_item(self):
+        self.ptt_item.title = (
+            "Hotkey: halten → auf zweimal drücken" if push_to_talk()
+            else "Hotkey: zweimal drücken → auf halten"
+        )
+
+    def toggle_ptt(self, _):
+        """Schaltet zwischen Halten und zweimal Druecken um."""
+        neu = not push_to_talk()
+        self.settings["push_to_talk"] = neu
+        save_settings(self.settings)
+        self._update_ptt_item()
+        log(f"Push-to-talk umgeschaltet auf: {neu}")
+        notify("Hotkey", "Halten zum Aufnehmen" if neu else "Zweimal drücken")
+
     def unload_models(self, _):
         """Gibt den Speicher der Modelle frei — im Hintergrund.
 
@@ -494,7 +558,7 @@ class VoiceTranscriptApp(rumps.App):
 
     def _start_llm_server(self):
         """Startet den persistenten LLM-Server als separaten uv-Prozess."""
-        if not LLM_ENABLED or llm_is_running():
+        if not llm_enabled() or llm_is_running():
             return
 
         notify("LLM", "Modell wird geladen...")
@@ -509,15 +573,78 @@ class VoiceTranscriptApp(rumps.App):
             self._llm_process = None
             notify("Voice Transcript", "LLM-Server konnte nicht gestartet werden")
 
+    def _restart_llm_server_if_dead(self):
+        """Startet den LLM-Server neu, wenn er weggestorben ist.
+
+        Der Statustimer sah den Ausfall bisher (⚠ LLM nicht erreichbar) und tat
+        nichts — ohne Neustart der ganzen App blieb die Bereinigung aus.
+
+        Mit Rücknahme: kommt der Server prinzipiell nicht hoch, versuchte der
+        5-Sekunden-Timer es gemessen 12x pro Minute, jedes Mal mit Benachrichtigung.
+        """
+        if not llm_enabled() or llm_is_running():
+            self._llm_restart_versuche = 0   # laeuft wieder, Zaehler zuruecksetzen
+            return
+
+        # Ein noch laufender eigener Prozess heisst: das Modell laedt gerade.
+        if self._llm_process is not None and self._llm_process.poll() is None:
+            return
+
+        if self._llm_restart_versuche >= LLM_RESTART_MAX:
+            return  # aufgegeben; der Grund steht einmal im Log
+
+        jetzt = time.monotonic()
+        if jetzt - self._llm_restart_zuletzt < LLM_RESTART_INTERVAL:
+            return
+
+        self._llm_restart_zuletzt = jetzt
+        self._llm_restart_versuche += 1
+        log(f"LLM-Server ist weg — Neustart "
+            f"(Versuch {self._llm_restart_versuche}/{LLM_RESTART_MAX})")
+        self._start_llm_server()
+
+        if self._llm_restart_versuche >= LLM_RESTART_MAX:
+            log("LLM-Server startet nicht — keine weiteren Versuche. "
+                "Im Menue LLM aus- und wieder einschalten, um es erneut zu probieren.")
+            notify("LLM", "Server startet nicht — siehe app.log")
+
     def _register_hotkey(self):
         hk = self.settings["hotkey"]
-        error = register_hotkey(hk["key"], hk["modifiers"], self.toggle_dictation)
+        error = register_hotkey(hk["key"], hk["modifiers"],
+                                self._hotkey_pressed, on_release=self._hotkey_released)
         if error:
             log(f"Hotkey-Registrierung fehlgeschlagen: {error}")
             notify("Hotkey", error)
         else:
             log(f"Hotkey registriert: {format_hotkey(hk['key'], hk['modifiers'])}")
         return error is None
+
+    def _hotkey_pressed(self):
+        """Hotkey gedrueckt. Bei Push-to-talk nur starten, sonst umschalten."""
+        if not push_to_talk():
+            self.toggle_dictation()
+            return
+        if not self.recording:
+            self._start_dictation()
+
+    def _hotkey_released(self):
+        """Hotkey losgelassen — nur bei Push-to-talk von Bedeutung.
+
+        Bewusst *nicht* auf _state == "recording" pruefen: bei einem kurzen Antippen
+        kommt das Loslassen an, bevor der Diktat-Thread den Zustand gesetzt hat. Mit
+        dieser Pruefung ging der Stopp verloren und die Aufnahme lief endlos weiter
+        (gemessen bei 10 ms Tastendruck).
+
+        stop_dictation() ist gefahrlos, wenn gerade nichts aufnimmt: es findet keine
+        laufende Sitzung und keine lebende yap-PID und gibt False zurueck. Laeuft die
+        Erkennung schon, ist der Aufruf ebenfalls ein Nulleffekt.
+        """
+        if not push_to_talk():
+            return
+        if self._dictation_thread is None or not self._dictation_thread.is_alive():
+            return
+        from voice_transcript.main import stop_dictation
+        stop_dictation()
 
     def toggle_dictation(self, _=None):
         if self.recording:
@@ -539,6 +666,9 @@ class VoiceTranscriptApp(rumps.App):
             self._set_state("idle")
             return
 
+        self._start_dictation()
+
+    def _start_dictation(self):
         self._dictation_thread = threading.Thread(target=self._run_dictation, daemon=True)
         self._dictation_thread.start()
 
@@ -551,13 +681,17 @@ class VoiceTranscriptApp(rumps.App):
             self._set_state("recording")
 
         def on_stop():
+            self._set_state("transcribing")
+
+        def on_polish():
             self._set_state("processing")
 
         def on_result(text):
             _on_main(self._refresh_history)
 
         try:
-            dictate(on_start=on_start, on_stop=on_stop, on_result=on_result)
+            dictate(on_start=on_start, on_stop=on_stop, on_polish=on_polish,
+                    on_result=on_result)
         except Exception as e:
             log(f"Diktat-Thread abgebrochen: {type(e).__name__}: {e}")
         finally:

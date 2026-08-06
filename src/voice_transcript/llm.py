@@ -5,7 +5,7 @@ import struct
 import subprocess
 
 from voice_transcript.applog import log
-from voice_transcript.config import LLM_ENABLED, LLM_TIMEOUT, UV_PATH, project_dir
+from voice_transcript.config import LLM_TIMEOUT, UV_PATH, llm_enabled, project_dir
 from voice_transcript.llm_server import SOCKET_PATH
 from voice_transcript.notify import notify
 
@@ -73,7 +73,7 @@ def _query_subprocess(text):
 
 
 def llm_polish(text):
-    if not text or not LLM_ENABLED:
+    if not text or not llm_enabled():
         return text
 
     try:

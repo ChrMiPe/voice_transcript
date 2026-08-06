@@ -101,6 +101,8 @@ MIN_AUDIO_BYTES = 16000
 
 MLX_MODEL = "mlx-community/Qwen3-4B-4bit"
 MLX_TEMPERATURE = 0.2
+# Voreinstellung; umschaltbar ueber settings.json bzw. das Menue, ohne Rebuild.
+# Ausgeschaltet bleibt nur der Regex-Filter — die Spracherkennung laeuft weiter.
 LLM_ENABLED = True
 
 # Obergrenze fuer die LLM-Ausgabe. Frueher standen hier fest 1024 Tokens — bei
@@ -159,7 +161,22 @@ DEFAULT_SETTINGS = {
     "asr_engine": ASR_ENGINE,
     # Sekunden bis zum Entladen der Modelle, 0 = nie. Ohne Rebuild aenderbar.
     "model_idle_timeout": MODEL_IDLE_TIMEOUT,
+    # LLM-Bereinigung an/aus. Aus heisst: nur der Regex-Filter greift.
+    "llm_enabled": LLM_ENABLED,
+    # True: Hotkey halten nimmt auf, loslassen stoppt. False: zweimal druecken.
+    "push_to_talk": False,
 }
+
+
+def push_to_talk():
+    """Halten statt zweimal druecken. Voreinstellung: aus."""
+    return bool(load_settings().get("push_to_talk", False))
+
+
+def llm_enabled():
+    """Ob die LLM-Bereinigung laufen soll. Einstellung schlaegt Voreinstellung."""
+    wert = load_settings().get("llm_enabled", LLM_ENABLED)
+    return bool(wert)
 
 
 def load_settings():
