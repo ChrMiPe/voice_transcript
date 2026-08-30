@@ -62,6 +62,16 @@ echo "==> Signatur pruefen..."
 codesign --verify --deep --strict "$APP_PATH" && echo "   gueltig"
 codesign -d -r- "$APP_PATH" 2>/dev/null | grep designated | sed 's/^/   /'
 
+# Die Kopie in dist/ wegraeumen. Sie traegt dieselbe Bundle-ID wie die installierte
+# App, und macOS fuehrt in den Bedienungshilfen nur *eine* Zeile pro ID — welches
+# Binary der Schalter dann freigibt, ist nicht sichtbar. Gemessen lagen hier drei
+# Bundles mit `com.voicetranscript.app` auf der Platte, das dritte ein halbes Jahr
+# alt und mit eigenem cdhash: die Freigabe ging an das falsche, und die laufende
+# App meldete weiter „Bedienungshilfen fehlen“. Auch `open -a "Voice Transcript"`
+# haette jederzeit die falsche Kopie starten koennen.
+# Der naechste Build legt dist/ von selbst wieder an.
+rm -rf "dist/${APP_NAME}.app"
+
 # Das Bundle enthaelt MLX nicht (siehe build_app.spec/excludes) — der LLM-Server
 # laeuft per `uv run` aus dem Repo. Pfad hinterlegen, damit die App ihn findet.
 echo "==> Repo-Pfad hinterlegen..."

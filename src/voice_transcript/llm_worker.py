@@ -18,6 +18,7 @@ from voice_transcript.config import (
     TOKEN_BUDGET_MARGIN,
     USER_TEMPLATE,
 )
+from voice_transcript.cleanup import strip_prompt_markers
 from voice_transcript.glossary import prompt_section
 
 
@@ -62,7 +63,7 @@ def main():
         last = response
 
     truncated = last is not None and last.finish_reason == "length"
-    result = strip_thinking("".join(chunks)).strip()
+    result = strip_prompt_markers(strip_thinking("".join(chunks)))
 
     # Ein halber Satz ist schlimmer als ein unbereinigter ganzer.
     if truncated or not result or len(result) < len(text) * MIN_LENGTH_RATIO:

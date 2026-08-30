@@ -91,3 +91,72 @@ def test_alter_waechter_haette_abschneiden_durchgewinkt():
 ])
 def test_think_bloecke_werden_entfernt(roh, erwartet):
     assert strip_thinking(roh) == erwartet
+
+
+# ─── Prompt-Markierungen ───
+#
+# Der System-Prompt klammert das Diktat in <transkript>…</transkript>. Bei langen
+# Diktaten hat das Modell die Klammer mit ausgegeben, und sie landete im Editor.
+# Die Regeln dafuer stehen in test_cleanup.py — hier zaehlt nur, dass generate()
+# sie tatsaechlich anwendet und der Laengen-Waechter danach greift.
+
+class FakeAntwort:
+    def __init__(self, text, finish_reason=None):
+        self.text = text
+        self.finish_reason = finish_reason
+        self.generation_tokens = 1
+
+
+def _server_mit_ausgabe(monkeypatch, ausgabe):
+    """Ein Server, dessen „Modell" genau `ausgabe` erzeugt."""
+    import sys
+    import types
+
+    modul = types.ModuleType("mlx_lm")
+    modul.stream_generate = lambda *a, **kw: [FakeAntwort(ausgabe, "stop")]
+    monkeypatch.setitem(sys.modules, "mlx_lm", modul)
+
+    s = LLMServer()
+    s.tokenizer = FakeTokenizer()
+    s.tokenizer.apply_chat_template = lambda *a, **kw: "prompt"
+    s.model = object()  # verhindert das Nachladen in load_model()
+    s.sampler = object()
+    return s
+
+
+def test_generate_gibt_keine_markierungen_heraus(monkeypatch):
+    text = "Der Bilanzkreis für das Netzentgelt stimmt nicht."
+    server = _server_mit_ausgabe(monkeypatch, f"<transkript>{text}</transkript>")
+
+    ergebnis, hinweis = server.generate(text)
+
+    assert ergebnis == text
+    assert hinweis is None
+
+
+def test_generate_nimmt_den_rohtext_wenn_nur_markierungen_kommen(monkeypatch):
+    """Eine Ausgabe aus lauter Markierungen ist kein Ergebnis — dann muss der
+    unbereinigte Text gewinnen, statt dass „<transkript></transkript>" im Editor
+    landet."""
+    text = "Der Bilanzkreis für das Netzentgelt stimmt nicht."
+    server = _server_mit_ausgabe(monkeypatch, "<transkript></transkript>")
+
+    ergebnis, hinweis = server.generate(text)
+
+    assert ergebnis == text
+    assert hinweis == "LLM lieferte kein Ergebnis"
+
+
+# ─── Der Rohtext-Pfad ───
+
+def test_verworfene_bereinigung_laesst_das_diktat_unangetastet():
+    """Gibt der Server den Rohtext zurueck, darf der Client ihn nicht saeubern.
+
+    Der Befund aus dem Review: `_saeubern` lief auf allem, was zurueckkam — auch
+    auf dem unbereinigten Diktat, das der Server bei verworfener Bereinigung
+    liefert. Aus einer diktierten Ueberschrift wurde so stillschweigend Fliesstext.
+    """
+    from voice_transcript.llm import _saeubern
+
+    diktat = "Transkript: Meeting vom 3. Maerz mit Anna."
+    assert _saeubern(diktat, diktat) == diktat

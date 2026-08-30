@@ -114,6 +114,13 @@ cp -R "dist/${APP_NAME}.app" "$APP_PATH"
 # cdhash (gemessen, siehe build.sh) — und waere eine Aufweichung.
 codesign --force --deep --sign - "$APP_PATH"
 
+# Die Kopie in dist/ wegraeumen — wie in build.sh. Sie traegt dieselbe Bundle-ID
+# wie die installierte App, und macOS fuehrt in den Bedienungshilfen nur *eine*
+# Zeile pro ID: welches Binary der Schalter freigibt, ist dann nicht mehr
+# sichtbar. Gerade hier wiegt das schwer — wer den Installer nimmt, richtet die
+# Freigabe zum ersten Mal ein.
+rm -rf "dist/${APP_NAME}.app"
+
 # Das Bundle enthaelt MLX nicht (siehe build_app.spec/excludes) — der LLM-Server
 # laeuft per `uv run` aus dem Repo. Pfad hinterlegen, damit die App ihn findet.
 SUPPORT_DIR="$HOME/Library/Application Support/VoiceTranscript"

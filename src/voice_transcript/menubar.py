@@ -11,6 +11,7 @@ import rumps
 from AppKit import (
     NSAlert,
     NSAlertFirstButtonReturn,
+    NSApplicationWillTerminateNotification,
     NSBezelBorder,
     NSColor,
     NSFont,
@@ -23,7 +24,7 @@ from AppKit import (
     NSTextView,
     NSViewWidthSizable,
 )
-from Foundation import NSOperationQueue, NSThread
+from Foundation import NSNotificationCenter, NSObject, NSOperationQueue, NSThread
 
 from voice_transcript import asr, glossary, permissions
 from voice_transcript.applog import log
@@ -197,6 +198,29 @@ def _text_dialog(titel, hinweis, text, ok="Speichern", cancel="Abbrechen",
     return str(view.string())
 
 
+class _TerminationObserver(NSObject):
+    """Ruft eine Aufraeumfunktion, wenn AppKit den Prozess beendet.
+
+    Noetig, weil atexit auf diesem Weg nicht feuert — siehe _write_pid. Die
+    Benachrichtigung kommt auf jedem AppKit-Weg: der Menueeintrag „Beenden“, das
+    Abmelden, ein Quit-Apple-Event.
+    """
+
+    def terminating_(self, _notification):
+        try:
+            self.on_terminate()
+        except Exception as e:
+            log(f"Aufraeumen beim Beenden fehlgeschlagen: {type(e).__name__}: {e}")
+
+
+def make_termination_observer(on_terminate):
+    """Modulfunktion, weil PyObjC jede Methode einer ObjC-Subklasse als Selektor
+    deutet und eine Fabrik mit Argument zu keinem passt (wie panel.make_router)."""
+    observer = _TerminationObserver.alloc().init()
+    observer.on_terminate = on_terminate
+    return observer
+
+
 def _on_main(fn):
     """Fuehrt fn auf dem Main-Thread aus.
 
@@ -235,6 +259,8 @@ class VoiceTranscriptApp(rumps.App):
         self._llm_restart_zuletzt = 0.0
         self._phase_started = None
         self._elapsed_timer = None
+        self._cleaned_up = False
+        self._terminate_observer = None
 
         # super() hat gerade das PNG gesetzt — jetzt das SF-Symbol darueberlegen.
         # initializeStatusBar() liest _icon_nsimage beim Launch, der frueh gesetzte
@@ -751,14 +777,44 @@ class VoiceTranscriptApp(rumps.App):
     def _write_pid(self):
         with open(MENUBAR_PID_FILE, "w") as f:
             f.write(str(os.getpid()))
+
+        # atexit allein deckt nur den Start aus dem Quellbaum ab (Ctrl+C, sys.exit).
+        # „Beenden“ landet in NSApp.terminate_, und AppKit beendet den Prozess mit
+        # exit() aus C — Py_Finalize laeuft dabei nie, atexit-Handler feuern also
+        # nicht. Gemessen: nach dem Beenden lief der LLM-Server mit 1,95 GB weiter
+        # und die PID-Datei blieb mit einer toten PID liegen. Steht spaeter ein
+        # fremder Prozess unter dieser PID, haelt _is_already_running() die App fuer
+        # laufend und der naechste Start bricht wortlos ab.
         atexit.register(self._cleanup)
+        self._terminate_observer = make_termination_observer(self._cleanup)
+        NSNotificationCenter.defaultCenter().addObserver_selector_name_object_(
+            self._terminate_observer,
+            "terminating:",
+            NSApplicationWillTerminateNotification,
+            None,
+        )
 
     def _cleanup(self):
+        """Server stoppen und PID-Datei entfernen.
+
+        Darf mehrfach laufen: aus dem Quellbaum gestartet feuern Benachrichtigung
+        *und* atexit.
+        """
+        if self._cleaned_up:
+            return
+
         llm_stop_server()
         if self._llm_process is not None:
             self._llm_process.terminate()
         if os.path.exists(MENUBAR_PID_FILE):
             os.remove(MENUBAR_PID_FILE)
+
+        # Erst hier, nicht am Anfang: bricht etwas oben ab, faengt der zweite Weg
+        # (atexit) es auf. Stuende das Flag vorn, waere er stillgelegt und die
+        # PID-Datei bliebe liegen — genau der Zustand, gegen den diese Methode
+        # geschrieben ist, denn _is_already_running() haelt die App dann fuer
+        # laufend und der naechste Start bricht wortlos ab.
+        self._cleaned_up = True
 
     def _start_llm_server(self):
         """Startet den persistenten LLM-Server als separaten uv-Prozess."""

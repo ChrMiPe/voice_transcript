@@ -5,6 +5,7 @@ import struct
 import subprocess
 
 from voice_transcript.applog import log
+from voice_transcript.cleanup import strip_prompt_markers
 from voice_transcript.config import LLM_TIMEOUT, UV_PATH, llm_enabled, project_dir
 from voice_transcript.llm_server import SOCKET_PATH
 from voice_transcript.notify import notify
@@ -72,6 +73,27 @@ def _query_subprocess(text):
     return None
 
 
+def _saeubern(result, text):
+    """Markierungen aus der Modellausgabe entfernen, sonst den Rohtext.
+
+    Auch hier und nicht nur im Server: der Server laeuft als eigener Prozess und
+    ueberlebt ein Update der App. Bis er neu startet, liefert er weiter Ausgaben
+    mit Markierungen — diese Zeile ist die letzte Station vor dem Editor.
+    """
+    # Verwirft der Server die Bereinigung, gibt er den *Rohtext* zurueck — dann
+    # ist nichts zu saeubern, und die Bereinigung wuerde sich am Diktat selbst
+    # vergreifen: aus „Transkript: Meeting mit Anna." wuerde „Meeting mit Anna.".
+    # Genau der Pfad, der unangetasteten Text zusichert, haette ihn angetastet.
+    if result == text:
+        return text
+
+    sauber = strip_prompt_markers(result)
+    if sauber:
+        return sauber
+    log("LLM-Ausgabe bestand nur aus Markierungen — nehme den unbereinigten Text")
+    return text
+
+
 def llm_polish(text):
     if not text or not llm_enabled():
         return text
@@ -81,12 +103,12 @@ def llm_polish(text):
         if os.path.exists(SOCKET_PATH):
             result = _query_server(text)
             if result:
-                return result
+                return _saeubern(result, text)
 
         # Fallback auf Subprocess
         result = _query_subprocess(text)
         if result:
-            return result
+            return _saeubern(result, text)
 
         return text
 

@@ -12,6 +12,7 @@ import time
 import wave
 
 from voice_transcript.applog import log
+from voice_transcript.cleanup import strip_prompt_markers
 from voice_transcript.glossary import prompt_section, whisper_prompt
 from voice_transcript.config import (
     MIN_LENGTH_RATIO,
@@ -246,7 +247,9 @@ class LLMServer:
             raw = "".join(chunks)
 
         truncated = last is not None and last.finish_reason == "length"
-        result = strip_thinking(raw).strip()
+        # Vor den Pruefungen, nicht danach: eine Ausgabe, die nur aus den
+        # Markierungen besteht, soll als „leer" gelten und den Rohtext ziehen.
+        result = strip_prompt_markers(strip_thinking(raw))
 
         if truncated:
             # Ein halber Satz ist schlimmer als ein unbereinigter ganzer.
@@ -366,6 +369,21 @@ class LLMServer:
                 os.remove(PID_FILE)
 
 
+def _entfernen(*pfade):
+    """Loescht Dateien, die auch schon weg sein duerfen.
+
+    exists() und remove() sind zwei Schritte, und dazwischen passt der Server:
+    er raeumt Socket und PID-Datei in seinem eigenen `finally` weg. Der
+    FileNotFoundError daraus ist bis hierher aus stop_server() herausgeflogen —
+    mitten im Beenden, wo er den Rest des Aufraeumens verschluckt hat.
+    """
+    for pfad in pfade:
+        try:
+            os.remove(pfad)
+        except OSError:
+            pass
+
+
 def is_running():
     """Prueft ob der LLM-Server laeuft."""
     if not os.path.exists(PID_FILE):
@@ -377,10 +395,7 @@ def is_running():
         return True
     except (OSError, ValueError):
         # Prozess existiert nicht mehr — aufraemen
-        if os.path.exists(PID_FILE):
-            os.remove(PID_FILE)
-        if os.path.exists(SOCKET_PATH):
-            os.remove(SOCKET_PATH)
+        _entfernen(PID_FILE, SOCKET_PATH)
         return False
 
 
@@ -396,10 +411,7 @@ def stop_server():
         os.kill(pid, signal.SIGTERM)
     except (OSError, ValueError):
         pass
-    # Aufraemen
-    for path in (PID_FILE, SOCKET_PATH):
-        if os.path.exists(path):
-            os.remove(path)
+    _entfernen(PID_FILE, SOCKET_PATH)
 
 
 if __name__ == "__main__":
