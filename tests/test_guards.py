@@ -19,7 +19,7 @@ from voice_transcript.llm_server import LLMServer, drop_invented_ending, strip_t
 
 
 class FakeTokenizer:
-    """Ein Token je vier Zeichen — nahe an den gemessenen 4,10 fuer Deutsch."""
+    """Ein Token je vier Zeichen — nahe an den gemessenen 3,98 bis 4,53 fuer Deutsch."""
 
     def encode(self, text):
         return [0] * max(1, len(text) // 4)
@@ -91,6 +91,9 @@ def test_alter_waechter_haette_abschneiden_durchgewinkt():
     ("<think>a\nb\nc</think>  Text  ", "Text"),
     ("Kein Think-Block.", "Kein Think-Block."),
     ("<think>nur denken</think>", ""),
+    # Gemma 4 — so im Test beobachtet, als es ohne Schalter zu denken anfing
+    ("<|channel>thought\nThinking Process:\n1. Analyze<channel|>Das Ergebnis.", "Das Ergebnis."),
+    ("<|channel>thought\nnur denken<channel|>", ""),
 ])
 def test_think_bloecke_werden_entfernt(roh, erwartet):
     assert strip_thinking(roh) == erwartet

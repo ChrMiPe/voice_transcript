@@ -5,7 +5,7 @@ Text landet am Cursor. Spracherkennung und Textbereinigung laufen **komplett lok
 es verlässt kein Audio und kein Text das Gerät.
 
 ```
-Hotkey ⌃⌘E → yap (Apple Speech) → Shortcuts → Füllwörter-Filter → LLM (Qwen3-4B) → Clipboard → ⌘V
+Hotkey ⌃⌘E → yap (Apple Speech) → Shortcuts → Füllwörter-Filter → LLM (Gemma 4 E4B) → Clipboard → ⌘V
 ```
 
 Das lokale LLM korrigiert Grammatik, Interpunktion und Groß-/Kleinschreibung, macht aus
@@ -15,7 +15,7 @@ verändern.
 ## Features
 
 - **Globaler Hotkey** zum Starten/Stoppen, Standard `⌃⌘E`, in der App änderbar
-- **Lokales LLM** (Qwen3-4B via MLX) — offline, keine Cloud, keine API-Keys
+- **Lokales LLM** (Gemma 4 E4B via MLX) — offline, keine Cloud, keine API-Keys
 - **Text-Shortcuts**: gesprochenes „chris email" wird zur echten Adresse
 - **Menüleisten-Feedback**: Icon zeigt Ruhe / Aufnahme / Verarbeitung
 - **Historie** der letzten 20 Diktate, per Klick zurück ins Clipboard
@@ -27,7 +27,7 @@ verändern.
 |---|---|
 | Hardware | Mac mit Apple Silicon (M1 oder neuer) — MLX läuft nicht auf Intel |
 | System | macOS 13+ |
-| Speicher | ~2,1 GB Modell-Cache + ~360 MB Python-Dependencies |
+| Speicher | ~5,2 GB LLM + ~1,5 GB Whisper im Modell-Cache, ~360 MB Python-Dependencies |
 | Tools | [Homebrew](https://brew.sh), [uv](https://docs.astral.sh/uv/), [yap](https://github.com/finnvoor/yap) — `install.sh` installiert fehlende automatisch |
 
 > **Das Repo bleibt nach der Installation nötig.** Die `.app` enthält MLX absichtlich nicht
@@ -45,7 +45,7 @@ bash install.sh
 ```
 
 Das Script prüft die Hardware, installiert fehlende Tools (Homebrew, yap, uv), lädt die
-Python-Dependencies und das LLM-Modell (~2,1 GB, nur beim ersten Mal), baut die `.app`, installiert
+Python-Dependencies und das LLM-Modell (~5,2 GB, nur beim ersten Mal), baut die `.app`, installiert
 sie nach `/Applications`, signiert sie ad-hoc, richtet den Autostart als LaunchAgent ein und
 startet die App.
 
@@ -124,7 +124,7 @@ brew install yap
 uv sync
 
 # 3. LLM-Modell vorab laden (sonst passiert es beim ersten Start)
-uv run python -c "from mlx_lm import load; load('mlx-community/Qwen3-4B-4bit')"
+uv run python -c "from mlx_lm import load; load('mlx-community/gemma-4-e4b-it-4bit')"
 
 # 4. App bauen, installieren, signieren, Repo-Pfad hinterlegen
 bash build.sh
@@ -310,13 +310,13 @@ Das Token-Budget richtet sich nach der Eingabe (`TOKEN_BUDGET_FACTOR` × Eingabe
 `TOKEN_BUDGET_MARGIN`, gedeckelt auf `MLX_MAX_TOKENS`), denn Bereinigen heißt nicht erfinden: die
 Ausgabe ist ungefähr so lang wie das Diktat.
 
-> Vorher stand hier ein fester Deckel von 1024 Tokens. Bei 4,10 Zeichen pro Token — mit diesem
-> Tokenizer gemessen — sind das nur ~4.200 Zeichen Ausgabe, also rund fünf Minuten Sprechen.
+> Vorher stand hier ein fester Deckel von 1024 Tokens. Bei 4,10 Zeichen pro Token — mit dem
+> damaligen Qwen-Tokenizer gemessen — sind das nur ~4.200 Zeichen Ausgabe, also rund fünf Minuten Sprechen.
 > Längere Diktate kamen **mitten im Satz abgeschnitten** heraus, und der 30-%-Wächter hat das nicht
 > gemerkt: bei 6.000 Zeichen Eingabe gilt `4200 > 1800`, er hätte erst ab ~14.000 Zeichen Eingabe
 > angeschlagen. Genau dieser Bereich — 4.200 bis 14.000 Zeichen — verlor still Text.
 
-Das Modell schafft ~40 Tokens/s, das Budget-Maximum braucht also über eine Minute; `LLM_TIMEOUT`
+Das Modell schafft gemessen ~33 Tokens/s, das Budget-Maximum braucht also gut zwei Minuten; `LLM_TIMEOUT`
 liegt deshalb bei 180 s statt der früheren 30. Fällt der Server ganz aus, greift ein
 Subprozess-Fallback (`llm_worker.py`); scheitert auch der, bekommst du den regex-bereinigten Text.
 
@@ -350,15 +350,15 @@ der Kaltstart von 1,3 s fällt nur beim ersten Diktat an. Die Aufnahme selbst pa
 
 ### Speicher freigeben
 
-Beide Modelle zusammen belegen gemessen **4,49 GB** (MLX aktiv + Cache). Wer den
+Beide Modelle zusammen belegen gemessen **5,87 GB** (MLX aktiv + Cache). Wer den
 Speicher für andere lokale Modelle braucht, bekommt ihn zurück:
 
 | Aktion | Wirkung |
 |---|---|
-| **Einstellungen → Modelle entladen** | sofort, gemessen 4,49 GB → 0,00 GB |
+| **Einstellungen → Modelle entladen** | sofort, gemessen 5,87 GB → 0,00 GB |
 | `model_idle_timeout` in `settings.json` | automatisch nach N Sekunden ohne Nutzung (Standard 600, `0` schaltet ab) |
 
-Der Preis ist gering: **1,1 s** für das Sprachmodell, **1,5 s** für Whisper. Beide
+Der Preis ist gering: **2,1 s** für das Sprachmodell, **1,5 s** für Whisper. Beide
 laden beim nächsten Diktat von selbst wieder, es geht nichts verloren. Die
 Statuszeile im Panel zeigt `LLM bereit — Modelle entladen`, solange der Speicher
 frei ist.
@@ -557,8 +557,8 @@ Häufigste Ursache: das Repo wurde verschoben oder gelöscht, `project_dir` zeig
 `bash build.sh` erneut ausführen.
 
 **LLM-Modell lädt nicht**
-Beim ersten Start braucht es Internet für ~2,1 GB. Cache liegt unter
-`~/.cache/huggingface/hub/models--mlx-community--Qwen3-4B-4bit/`.
+Beim ersten Start braucht es Internet für ~5,2 GB. Cache liegt unter
+`~/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/`.
 
 **App startet nicht / kein Icon**
 Vermutlich läuft schon eine Instanz — die App verhindert Doppelstarts über
@@ -586,7 +586,7 @@ Die App setzt `LANG=de_DE.UTF-8` selbst. Falls doch: System-Locale auf UTF-8 pr�
 |-----------|-------------|
 | Spracherkennung | [Whisper large-v3-turbo](https://huggingface.co/mlx-community/whisper-large-v3-turbo) via MLX, Rückfall [yap](https://github.com/finnvoor/yap) |
 | Aufnahme | `AVAudioRecorder` (PyObjC), 16 kHz Mono |
-| LLM | [MLX](https://github.com/ml-explore/mlx) + [Qwen3-4B-4bit](https://huggingface.co/mlx-community/Qwen3-4B-4bit) |
+| LLM | [MLX](https://github.com/ml-explore/mlx) + [Gemma 4 E4B (4-bit)](https://huggingface.co/mlx-community/gemma-4-e4b-it-4bit) |
 | Menüleiste | [rumps](https://github.com/jaredks/rumps) (Menü) + `NSPopover` (Panel) |
 | Hotkey | Carbon `RegisterEventHotKey` (via `ctypes`, ohne Berechtigung) |
 | Berechtigungs-Status | `AXIsProcessTrusted` (via `ctypes`, kein zusätzliches pyobjc-Paket) |

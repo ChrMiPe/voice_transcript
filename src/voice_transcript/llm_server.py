@@ -48,8 +48,15 @@ def _whisper_holder():
     return getattr(modul, "ModelHolder", None) if modul is not None else None
 
 
+# Denk-Bloecke beider Modellfamilien: Qwen schreibt <think>…</think>, Gemma 4
+# <|channel>thought…<channel|>. Abgeschaltet ist das Denken per enable_thinking,
+# aber Gemma hat im Test auch ohne den Schalter von sich aus gedacht — und dieser
+# Text darf nie im Editor landen.
+_DENKEN = re.compile(r"<think>.*?</think>|<\|channel>.*?<channel\|>", re.DOTALL)
+
+
 def strip_thinking(text):
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return _DENKEN.sub("", text).strip()
 
 
 def drop_invented_ending(ergebnis, samples, rate):
@@ -137,7 +144,7 @@ class LLMServer:
         Modell in der Klassenvariable ModelHolder.model; ohne die zu leeren bleiben
         gemessen 1,62 GB liegen, egal wie oft man clear_cache() ruft.
 
-        Gemessen: 4,49 GB belegt -> 0,00 GB nach diesem Aufruf.
+        Gemessen: 5,87 GB belegt -> 0,00 GB nach diesem Aufruf.
         """
         import mlx.core as mx
 
@@ -257,8 +264,8 @@ class LLMServer:
         Bereinigen heisst nicht erfinden — die Ausgabe ist ungefaehr so lang wie
         die Eingabe, mit etwas Luft fuer Interpunktion und Absaetze. Ein fester
         Deckel von 1024 Tokens hat lange Diktate stumm abgeschnitten: bei 4,10
-        Zeichen pro Token (gemessen mit diesem Tokenizer) waren das ~4.200
-        Zeichen, also rund fuenf Minuten Sprechen.
+        Zeichen pro Token (gemessen mit dem damaligen Qwen-Tokenizer) waren das
+        ~4.200 Zeichen, also rund fuenf Minuten Sprechen.
         """
         prompt_tokens = len(self.tokenizer.encode(text))
         budget = int(prompt_tokens * TOKEN_BUDGET_FACTOR) + TOKEN_BUDGET_MARGIN
@@ -278,7 +285,7 @@ class LLMServer:
         # davor, kann ein Entladen dazwischenfunken und stream_generate bekommt
         # None statt eines Modells.
         with self._lock:
-            # Nach dem Entladen hier wieder hochfahren — kostet gemessen 1,1 s.
+            # Nach dem Entladen hier wieder hochfahren — kostet gemessen 2,1 s.
             self.load_model()
 
             # Glossar bei jeder Anfrage frisch: so wirkt eine Aenderung an
@@ -405,7 +412,7 @@ class LLMServer:
         # Bewusst *nicht* hier laden. Frueher hielt der Server ab der Anmeldung
         # 2,26 GB, auch wenn nie diktiert wurde — der Untaetigkeits-Timer haette erst
         # nach zehn Minuten aufgeraeumt. generate() und transcribe() laden selbst
-        # nach; das erste Diktat kostet dadurch 1,1 s mehr, jedes weitere nichts.
+        # nach; das erste Diktat kostet dadurch 2,1 s mehr, jedes weitere nichts.
 
         # PID schreiben
         with open(PID_FILE, "w") as f:

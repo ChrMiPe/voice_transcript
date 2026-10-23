@@ -6,7 +6,6 @@ wenn der Server nicht laeuft — und ein Rueckfall, der stumm Text abschneidet, 
 schlimmer als keiner.
 """
 import sys
-import re
 
 from voice_transcript.config import (
     MIN_LENGTH_RATIO,
@@ -20,10 +19,9 @@ from voice_transcript.config import (
 )
 from voice_transcript.cleanup import strip_prompt_markers
 from voice_transcript.glossary import prompt_section
-
-
-def strip_thinking(text):
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+# Aus dem Server statt einer eigenen Kopie: die Kopie kannte nur Qwens <think> und
+# haette Gemmas Denk-Bloecke durchgelassen.
+from voice_transcript.llm_server import strip_thinking
 
 
 def main():

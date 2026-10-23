@@ -296,7 +296,7 @@ class VoiceTranscriptApp(rumps.App):
             item._wert = wert
 
         # Der Entlade-Zeitpunkt war bis hierher nur per Hand in settings.json
-        # erreichbar — und er entscheidet, wann 4,49 GB freigegeben werden.
+        # erreichbar — und er entscheidet, wann 5,87 GB freigegeben werden.
         self.idle_items = {}
         for sekunden, text in MODEL_IDLE_CHOICES:
             item = rumps.MenuItem(text, callback=self._pick_idle)
@@ -687,7 +687,7 @@ class VoiceTranscriptApp(rumps.App):
         """Gibt den Speicher der Modelle frei — im Hintergrund.
 
         Nuetzlich vor anderen lokalen Modellen: beide zusammen belegen gemessen
-        4,49 GB. Sie laden beim naechsten Diktat von selbst wieder (1,1 s bzw.
+        5,87 GB. Sie laden beim naechsten Diktat von selbst wieder (2,1 s bzw.
         1,5 s), es geht also nichts verloren.
 
         Der Aufruf wandert bewusst in einen Thread: der Server gibt erst frei, wenn

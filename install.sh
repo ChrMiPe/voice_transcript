@@ -85,13 +85,13 @@ info "Dependencies installiert"
 
 step "LLM-Modell pruefen..."
 
-MODEL_DIR="$HOME/.cache/huggingface/hub/models--mlx-community--Qwen3-4B-4bit"
+MODEL_DIR="$HOME/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit"
 
 if [[ -d "$MODEL_DIR" ]]; then
     info "Modell bereits vorhanden"
 else
-    warn "Modell wird heruntergeladen (~2.1 GB) — das dauert beim ersten Mal..."
-    uv run python -c "from mlx_lm import load; load('mlx-community/Qwen3-4B-4bit')"
+    warn "Modell wird heruntergeladen (~5.2 GB) — das dauert beim ersten Mal..."
+    uv run python -c "from mlx_lm import load; load('mlx-community/gemma-4-e4b-it-4bit')"
     info "Modell heruntergeladen"
 fi
 

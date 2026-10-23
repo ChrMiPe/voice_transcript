@@ -117,17 +117,26 @@ WHISPER_MIN_VOICED = 0.2
 # Mono mit 16 bit sind das 32.000 Bytes pro Sekunde.
 MIN_AUDIO_BYTES = 16000
 
-MLX_MODEL = "mlx-community/Qwen3-4B-4bit"
+# Gemma 4 E4B statt Qwen3-4B, weil es tatsaechlich bereinigt: im Vergleich an 16
+# echten Diktaten liess Qwen3-4B Fuellwoerter und Grammatik fast unveraendert
+# (97 % der Woerter wortgleich), Gemma korrigiert, setzt Absaetze und behaelt den
+# Inhalt — und war insgesamt sogar schneller (66,5 s zu 85,9 s). Verworfen:
+# Qwen3.5-4B formuliert um und laesst Inhalt weg, Qwen3.5-2B bereinigt kaum.
+# Ohne Entwurfsmodell: spekulatives Dekodieren (Gemma 3 270M oder Gemma 4 E2B als
+# Entwurf) hat mit mlx-lm 0.31.3 die Ausgabe veraendert — Abbruch nach ~10 Tokens
+# oder Lauf ins Token-Limit — und keinen verlaesslichen Zeitgewinn gebracht.
+MLX_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
 MLX_TEMPERATURE = 0.2
 # Voreinstellung; umschaltbar ueber settings.json bzw. das Menue, ohne Rebuild.
 # Ausgeschaltet bleibt nur der Regex-Filter — die Spracherkennung laeuft weiter.
 LLM_ENABLED = True
 
 # Obergrenze fuer die LLM-Ausgabe. Frueher standen hier fest 1024 Tokens — bei
-# 4,10 Zeichen pro Token (mit diesem Tokenizer gemessen) sind das nur ~4.200
-# Zeichen, also rund fuenf Minuten Sprechen. Alles darueber kam mitten im Satz
-# abgeschnitten heraus, ohne Meldung: der Laengen-Waechter unten haette erst ab
-# ~14.000 Zeichen Eingabe angeschlagen.
+# 4,10 Zeichen pro Token (mit dem damaligen Qwen-Tokenizer gemessen) sind das nur
+# ~4.200 Zeichen, also rund fuenf Minuten Sprechen. Alles darueber kam mitten im
+# Satz abgeschnitten heraus, ohne Meldung: der Laengen-Waechter unten haette erst
+# ab ~14.000 Zeichen Eingabe angeschlagen. Mit Gemma sind es 3,98 Zeichen pro
+# Token, 4096 reichen also fuer ~16.300 Zeichen — rund 18 Minuten Sprechen.
 MLX_MAX_TOKENS = 4096
 # Das eigentliche Budget richtet sich nach der Eingabe — bereinigen heisst nicht
 # erfinden, die Ausgabe ist ungefaehr so lang wie das Diktat.
@@ -136,14 +145,14 @@ TOKEN_BUDGET_MARGIN = 128
 # Deutlich kuerzer als die Eingabe heisst: zusammengefasst statt bereinigt.
 MIN_LENGTH_RATIO = 0.3
 
-# Das Modell schafft ~40 Tokens/s, das Budget-Maximum braucht also ueber eine
-# Minute. Der frueher hier ausreichende 30-Sekunden-Deckel haette lange Diktate
+# Das Modell schafft gemessen ~33 Tokens/s (Median, M4 Air), das Budget-Maximum
+# braucht also gut zwei Minuten. Der frueher hier ausreichende 30-Sekunden-Deckel haette lange Diktate
 # in den Socket-Timeout laufen lassen.
 LLM_TIMEOUT = 180
 
 # Wie lange die Modelle nach der letzten Nutzung im Speicher bleiben (Sekunden).
-# Gemessen belegen beide zusammen 4,49 GB (MLX aktiv + Cache); nach dem Entladen
-# sind es 0,00 GB, und wieder einsatzbereit sind sie in 1,1 s (LLM) bzw. 1,5 s
+# Gemessen belegen beide zusammen 5,87 GB (MLX aktiv + Cache); nach dem Entladen
+# sind es 0,00 GB, und wieder einsatzbereit sind sie in 2,1 s (LLM) bzw. 1,5 s
 # (Whisper). Der Preis fuers Freigeben ist also gering — wer den Speicher fuer
 # andere lokale Modelle braucht, setzt den Wert niedrig.
 # 0 schaltet das Entladen ab: dann bleiben die Modelle dauerhaft geladen.
@@ -151,7 +160,7 @@ MODEL_IDLE_TIMEOUT = 600
 # Wie oft der Server auf Untaetigkeit prueft.
 MODEL_IDLE_CHECK_INTERVAL = 30
 # Auswahl fuers Menue: Sekunden bis zum Entladen, 0 heisst nie. Bis hierher war der
-# Wert nur per Hand in settings.json erreichbar — und er entscheidet, wann 4,49 GB
+# Wert nur per Hand in settings.json erreichbar — und er entscheidet, wann 5,87 GB
 # freigegeben werden.
 MODEL_IDLE_CHOICES = (
     (0, "immer geladen lassen"),
