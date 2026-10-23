@@ -26,7 +26,10 @@ from voice_transcript.config import (
     MODEL_IDLE_CHECK_INTERVAL,
     MODEL_IDLE_TIMEOUT,
     WHISPER_LANGUAGE,
+    WHISPER_MAX_OVERHANG,
+    WHISPER_MIN_VOICED,
     WHISPER_MODEL,
+    WHISPER_VOICE_LEVEL,
     load_settings,
 )
 
@@ -47,6 +50,63 @@ def _whisper_holder():
 
 def strip_thinking(text):
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def drop_invented_ending(ergebnis, samples, rate):
+    """Whispers Text ohne den Schluss, den das Modell erfunden hat.
+
+    Geprueft wird von hinten, und nur bis zum ersten echten Segment — mittendrin
+    wird nie etwas verworfen. Ein Segment am Ende faellt weg, wenn
+
+    - es mehr als WHISPER_MAX_OVERHANG hinter der Aufnahme endet: das Modell hat
+      Zeitstempel in den Auffuellbereich gesetzt, oder
+    - in seiner Zeitspanne nicht gesprochen wird. Das braucht es zusaetzlich,
+      weil Whisper ohne Zeitstempel das Ende auf das Aufnahmeende setzt — „Frau,
+      Frau, Frau…" kam so am ersten Merkmal vorbei.
+
+    Die zwei ergaenzen sich auch im Fehlerfall: in einem Raum, der so laut ist wie
+    die Stimme, haelt die Pegelpruefung alles fuer Sprache und laesst stehen. Der
+    Zeitstempel greift dann weiter.
+
+    Der Gesamttext ist nichts anderes als die Segmente hintereinander (gemessen in
+    108 von 108 Laeufen), also laesst sich ein Segment weglassen, ohne den Rest
+    anzufassen. Wird nichts verworfen, bleibt Whispers Text unveraendert.
+    """
+    import numpy as np
+
+    segmente = list(ergebnis.get("segments") or [])
+    dauer = len(samples) / rate
+
+    rahmen = max(int(rate * 0.03), 1)
+    rahmen_s = rahmen / rate
+    anzahl = len(samples) // rahmen
+    pegel = np.sqrt((samples[: anzahl * rahmen].reshape(anzahl, rahmen) ** 2).mean(axis=1))
+    schwelle = np.percentile(pegel, 95) * WHISPER_VOICE_LEVEL if anzahl else 0.0
+    stimmhaft = pegel > schwelle
+
+    def gesprochen(von, bis):
+        return float(stimmhaft[max(int(von / rahmen_s), 0):int(np.ceil(bis / rahmen_s))].sum()) * rahmen_s
+
+    verworfen = False
+    while segmente:
+        segment = segmente[-1]
+        text = segment["text"].strip()
+        ueberhang = segment["end"] - dauer
+        von, bis = segment["start"], min(segment["end"], dauer)
+        if text:
+            if ueberhang > WHISPER_MAX_OVERHANG:
+                grund = f"endet {ueberhang:.1f}s nach der Aufnahme"
+            elif gesprochen(von, bis) < WHISPER_MIN_VOICED:
+                grund = f"keine Sprache zwischen {von:.1f}s und {bis:.1f}s"
+            else:
+                break
+            log(f"Whisper-Schluss verworfen ({grund}): „{text}“")
+        segmente.pop()
+        verworfen = True
+
+    if not verworfen:
+        return (ergebnis.get("text") or "").strip()
+    return "".join(s["text"] for s in segmente).strip()
 
 
 class LLMServer:
@@ -162,6 +222,7 @@ class LLMServer:
                 if not frames:
                     return None, "Aufnahme ist leer"
                 rohdaten = handle.readframes(frames)
+                rate = handle.getframerate()
         except (OSError, wave.Error) as e:
             return None, f"Aufnahme nicht lesbar: {type(e).__name__}: {e}"
 
@@ -186,7 +247,9 @@ class LLMServer:
                 log(f"Whisper fehlgeschlagen: {type(e).__name__}: {e}")
                 return None, f"{type(e).__name__}: {e}"
 
-        return (ergebnis.get("text") or "").strip(), None
+        # Bleibt danach nichts uebrig, war die Aufnahme nur Stille — der leere Text
+        # loest in asr.py denselben Rueckfall aus wie ein Fehler.
+        return drop_invented_ending(ergebnis, samples, rate), None
 
     def _token_budget(self, text):
         """Obergrenze fuer die Ausgabe, an der Eingabe bemessen.

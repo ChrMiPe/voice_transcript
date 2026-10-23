@@ -95,6 +95,24 @@ YAP_LOCALE = "de-DE"
 # 700 Zeichen sind bei ~4,1 Zeichen/Token rund 170 Tokens, also mit Abstand drin.
 WHISPER_PROMPT_MAX_CHARS = 700
 
+# Whisper arbeitet in 30-s-Fenstern. Steckt im letzten Fenster kaum noch Sprache,
+# „hoert" das Modell im Auffuellbereich weiter und erfindet einen Schluss: „Vielen
+# Dank.", „Untertitelung des ZDF für funk, 2017", „Frau, Frau, Frau…" oder ein
+# Stueck vom Anfang noch einmal. Zwei Merkmale verraten das, siehe
+# drop_invented_ending() in llm_server.py.
+#
+# 1. Das Segment endet hinter der Aufnahme. Gemessen ragten erfundene 3,6 bis 29 s
+#    ueber das Ende, echte hoechstens 0,6 s, auch wenn mitten im letzten Wort
+#    gestoppt wurde.
+WHISPER_MAX_OVERHANG = 2.0
+# 2. In seiner Zeitspanne wird nicht gesprochen. Als gesprochen zaehlt ein 30-ms-
+#    Rahmen ueber diesem Anteil des Sprachpegels der Aufnahme (95. Perzentil) —
+#    relativ, damit ein leiser Sprecher nicht als Stille gilt. Gemessen an 80
+#    Aufnahmen: echte Endsegmente enthielten mindestens 0,48 s Sprache, erfundene
+#    hoechstens 0,09 s.
+WHISPER_VOICE_LEVEL = 0.1
+WHISPER_MIN_VOICED = 0.2
+
 # Kuerzere Aufnahmen gelten als Fehlgriff (Hotkey zweimal gestreift). Bei 16 kHz
 # Mono mit 16 bit sind das 32.000 Bytes pro Sekunde.
 MIN_AUDIO_BYTES = 16000
